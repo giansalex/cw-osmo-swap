@@ -11,12 +11,8 @@ use cw_storage_plus::Bound;
 
 use crate::amount::Amount;
 use crate::error::ContractError;
-use crate::ibc_msg::Ics20Packet;
-use crate::msg::{
-    AllowMsg, AllowedInfo, AllowedResponse, AllowedTokenInfo, AllowedTokenResponse,
-    ChannelResponse, ConfigResponse, ExecuteMsg, ExternalTokenMsg, InitMsg, ListAllowedResponse,
-    ListChannelsResponse, ListExternalTokensResponse, PortResponse, QueryMsg, TransferMsg,
-};
+use crate::ibc_msg::{Ics20Packet, OsmoPacket, SwapAmountInRoute, SwapPacket};
+use crate::msg::{AllowMsg, AllowedInfo, AllowedResponse, AllowedTokenInfo, AllowedTokenResponse, ChannelResponse, ConfigResponse, ExecuteMsg, ExternalTokenMsg, InitMsg, ListAllowedResponse, ListChannelsResponse, ListExternalTokensResponse, PortResponse, QueryMsg, TransferMsg, SwapMsg};
 use crate::state::{
     find_external_token, increase_channel_balance, join_ibc_paths, AllowInfo, Config,
     ExternalTokenInfo, ADMIN, ALLOW_LIST, CHANNEL_INFO, CHANNEL_STATE, CONFIG, EXTERNAL_TOKENS,
@@ -68,7 +64,11 @@ pub fn execute(
         ExecuteMsg::Transfer(msg) => {
             let coin = one_coin(&info)?;
             execute_transfer(deps, env, msg, Amount::Native(coin), info.sender)
-        }
+        },
+        ExecuteMsg::Swap(msg) => {
+            let coin = one_coin(&info)?;
+            execute_swap(deps, env, msg, Amount::Native(coin), info.sender)
+        },
         ExecuteMsg::Allow(allow) => execute_allow(deps, env, info, allow),
         ExecuteMsg::AllowExternalToken(token) => allow_external_token(deps, env, info, token),
         ExecuteMsg::UpdateAdmin { admin } => {
@@ -86,13 +86,26 @@ pub fn execute_receive(
 ) -> Result<Response, ContractError> {
     nonpayable(&info)?;
 
-    let msg: TransferMsg = from_binary(&wrapper.msg)?;
+    let msg: ExecuteMsg = from_binary(&wrapper.msg)?;
     let amount = Amount::Cw20(Cw20Coin {
         address: info.sender.to_string(),
         amount: wrapper.amount,
     });
     let api = deps.api;
-    execute_transfer(deps, env, msg, amount, api.addr_validate(&wrapper.sender)?)
+
+    match msg {
+        ExecuteMsg::Transfer(transfer) => execute_transfer(
+            deps,
+            env,
+            transfer,
+            amount,
+            api.addr_validate(&wrapper.sender)?,
+        ),
+        ExecuteMsg::Swap(swap) => {
+            execute_swap(deps, env, swap, amount, api.addr_validate(&wrapper.sender)?)
+        }
+        _ => Err(ContractError::UnknownRequest {}),
+    }
 }
 
 pub fn execute_transfer(
@@ -165,6 +178,98 @@ pub fn execute_transfer(
         .add_attribute("action", "transfer")
         .add_attribute("sender", &packet.sender)
         .add_attribute("receiver", &packet.receiver)
+        .add_attribute("denom", &packet.denom)
+        .add_attribute("amount", &packet.amount.to_string());
+
+    let burn = safe_burn(amount, our_chain);
+    if let Some(msg) = burn {
+        return Ok(res.add_message(msg));
+    }
+
+    Ok(res)
+}
+
+pub fn execute_swap(
+    deps: DepsMut,
+    env: Env,
+    msg: SwapMsg,
+    amount: Amount,
+    sender: Addr,
+) -> Result<Response, ContractError> {
+    if amount.is_empty() {
+        return Err(ContractError::NoFunds {});
+    }
+    // ensure the requested channel is registered
+    if !CHANNEL_INFO.has(deps.storage, &msg.channel) {
+        return Err(ContractError::NoSuchChannel { id: msg.channel });
+    }
+
+    // if cw20 token, ensure it is whitelisted
+    let mut denom = amount.denom();
+    let mut our_chain = true;
+    if let Amount::Cw20(coin) = &amount {
+        let addr = deps.api.addr_validate(&coin.address)?;
+        ALLOW_LIST
+            .may_load(deps.storage, &addr)?
+            .ok_or(ContractError::NotOnAllowList)?;
+
+        let token = find_external_token(deps.storage, coin.clone().address)?;
+        if let Some(ext_denom) = token {
+            // TODO: add port_id to external_token info
+            let q = WasmQuery::ContractInfo {
+                contract_addr: env.contract.address.into(),
+            };
+            let res: ContractInfoResponse = deps.querier.query(&q.into())?;
+            let ibc_prefix = join_ibc_paths(res.ibc_port.unwrap().as_str(), msg.channel.as_str());
+
+            denom = join_ibc_paths(ibc_prefix.as_str(), ext_denom.as_str());
+            our_chain = false;
+        }
+    };
+
+    // delta from user is in seconds
+    let timeout_delta = match msg.timeout {
+        Some(t) => t,
+        None => CONFIG.load(deps.storage)?.default_timeout,
+    };
+    // timeout is in nanoseconds
+    let timeout = env.block.time.plus_seconds(timeout_delta);
+
+    // build swap packet
+    let swap_packet = SwapPacket {
+        sender: sender.to_string(),
+        routes: vec![SwapAmountInRoute {
+            pool_id: msg.pool,
+            token_out_denom: msg.token_out,
+        }],
+        token_out_min_amount: msg.min_amount_out,
+    };
+
+    let packet = Ics20Packet::new(
+        amount.amount(),
+        denom,
+        sender.as_ref(),
+        "", // swap-mod will replace this address
+        Some(OsmoPacket::Swap(swap_packet)),
+    );
+    packet.validate()?;
+
+    if our_chain {
+        increase_channel_balance(deps.storage, &msg.channel, &amount.denom(), amount.amount())?;
+    }
+
+    // prepare ibc message
+    let msg = IbcMsg::SendPacket {
+        channel_id: msg.channel,
+        data: to_binary(&packet)?,
+        timeout: timeout.into(),
+    };
+
+    // send response
+    let res = Response::new()
+        .add_message(msg)
+        .add_attribute("action", "swap")
+        .add_attribute("sender", &packet.sender)
         .add_attribute("denom", &packet.denom)
         .add_attribute("amount", &packet.amount.to_string());
 
@@ -472,18 +577,18 @@ mod test {
         let msg = ExecuteMsg::Transfer(transfer.clone());
         let info = mock_info("foobar", &coins(1234567, "ucosm"));
         let res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
-        assert_eq!(res.messages[0].gas_limit, None);
         assert_eq!(1, res.messages.len());
         if let CosmosMsg::Ibc(IbcMsg::SendPacket {
-            channel_id,
-            data,
-            timeout,
-        }) = &res.messages[0].msg
+                                  channel_id,
+                                  data,
+                                  timeout,
+                              }) = &res.messages[0].msg
         {
             let expected_timeout = mock_env().block.time.plus_seconds(DEFAULT_TIMEOUT);
             assert_eq!(timeout, &expected_timeout.into());
             assert_eq!(channel_id.as_str(), send_channel);
             let msg: Ics20Packet = from_binary(data).unwrap();
+
             assert_eq!(msg.amount, Uint128::new(1234567));
             assert_eq!(msg.denom.as_str(), "ucosm");
             assert_eq!(msg.sender.as_str(), "foobar");
@@ -523,11 +628,11 @@ mod test {
         let cw20_addr = "my-token";
         let mut deps = setup(&[send_channel], &[(cw20_addr, 123456)]);
 
-        let transfer = TransferMsg {
+        let transfer = ExecuteMsg::Transfer(TransferMsg {
             channel: send_channel.to_string(),
             remote_address: "foreign-address".to_string(),
             timeout: Some(7777),
-        };
+        });
         let msg = ExecuteMsg::Receive(Cw20ReceiveMsg {
             sender: "my-account".into(),
             amount: Uint128::new(888777666),
@@ -569,11 +674,11 @@ mod test {
         let mut deps = setup(&[send_channel], &[]);
 
         let cw20_addr = "my-token";
-        let transfer = TransferMsg {
+        let transfer = ExecuteMsg::Transfer(TransferMsg {
             channel: send_channel.to_string(),
             remote_address: "foreign-address".to_string(),
             timeout: Some(7777),
-        };
+        });
         let msg = ExecuteMsg::Receive(Cw20ReceiveMsg {
             sender: "my-account".into(),
             amount: Uint128::new(888777666),

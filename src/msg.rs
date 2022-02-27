@@ -1,3 +1,4 @@
+use cosmwasm_std::{Uint128, Uint64};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -37,12 +38,23 @@ pub enum ExecuteMsg {
     Receive(Cw20ReceiveMsg),
     /// This allows us to transfer *exactly one* native token
     Transfer(TransferMsg),
+    /// This allows us to swap tokens
+    Swap(SwapMsg),
     /// This must be called by gov_contract, will allow a new cw20 token to be sent
     Allow(AllowMsg),
     /// This must be called by gov_contract, will allow a new external token to be received
     AllowExternalToken(ExternalTokenMsg),
     /// Change the admin (must be called by current admin)
     UpdateAdmin { admin: String },
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct SwapMsg {
+    pub channel: String,
+    pub pool: Uint64,
+    pub token_out: String,
+    pub min_amount_out: Uint128,
+    pub timeout: Option<u64>,
 }
 
 /// This is the message we accept via Receive
