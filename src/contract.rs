@@ -12,7 +12,11 @@ use cw_storage_plus::Bound;
 use crate::amount::Amount;
 use crate::error::ContractError;
 use crate::ibc_msg::{Ics20Packet, OsmoPacket, SwapAmountInRoute, SwapPacket};
-use crate::msg::{AllowMsg, AllowedInfo, AllowedResponse, AllowedTokenInfo, AllowedTokenResponse, ChannelResponse, ConfigResponse, ExecuteMsg, ExternalTokenMsg, InitMsg, ListAllowedResponse, ListChannelsResponse, ListExternalTokensResponse, PortResponse, QueryMsg, TransferMsg, SwapMsg};
+use crate::msg::{
+    AllowMsg, AllowedInfo, AllowedResponse, AllowedTokenInfo, AllowedTokenResponse,
+    ChannelResponse, ConfigResponse, ExecuteMsg, ExternalTokenMsg, InitMsg, ListAllowedResponse,
+    ListChannelsResponse, ListExternalTokensResponse, PortResponse, QueryMsg, SwapMsg, TransferMsg,
+};
 use crate::state::{
     find_external_token, increase_channel_balance, join_ibc_paths, AllowInfo, Config,
     ExternalTokenInfo, ADMIN, ALLOW_LIST, CHANNEL_INFO, CHANNEL_STATE, CONFIG, EXTERNAL_TOKENS,
@@ -64,11 +68,11 @@ pub fn execute(
         ExecuteMsg::Transfer(msg) => {
             let coin = one_coin(&info)?;
             execute_transfer(deps, env, msg, Amount::Native(coin), info.sender)
-        },
+        }
         ExecuteMsg::Swap(msg) => {
             let coin = one_coin(&info)?;
             execute_swap(deps, env, msg, Amount::Native(coin), info.sender)
-        },
+        }
         ExecuteMsg::Allow(allow) => execute_allow(deps, env, info, allow),
         ExecuteMsg::AllowExternalToken(token) => allow_external_token(deps, env, info, token),
         ExecuteMsg::UpdateAdmin { admin } => {
@@ -155,7 +159,13 @@ pub fn execute_transfer(
     let timeout = env.block.time.plus_seconds(timeout_delta);
 
     // build ics20 packet
-    let packet = Ics20Packet::new(amount.amount(), denom, sender.as_ref(), &msg.remote_address, None);
+    let packet = Ics20Packet::new(
+        amount.amount(),
+        denom,
+        sender.as_ref(),
+        &msg.remote_address,
+        None,
+    );
     packet.validate()?;
 
     if our_chain {
@@ -579,10 +589,10 @@ mod test {
         let res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
         assert_eq!(1, res.messages.len());
         if let CosmosMsg::Ibc(IbcMsg::SendPacket {
-                                  channel_id,
-                                  data,
-                                  timeout,
-                              }) = &res.messages[0].msg
+            channel_id,
+            data,
+            timeout,
+        }) = &res.messages[0].msg
         {
             let expected_timeout = mock_env().block.time.plus_seconds(DEFAULT_TIMEOUT);
             assert_eq!(timeout, &expected_timeout.into());

@@ -21,7 +21,7 @@ pub struct SwapAmountInRoute {
 /// This is the success response we send on ack for PacketMsg::Balance.
 /// Just acknowledge success or error
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-pub struct SwapAmountInAck  {
+pub struct SwapAmountInAck {
     pub amount: Uint128,
     pub denom: String,
 }
@@ -44,7 +44,6 @@ pub struct Ics20Packet {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action: Option<OsmoPacket>,
 }
-
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub enum OsmoPacket {
