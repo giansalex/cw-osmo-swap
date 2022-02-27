@@ -2,17 +2,17 @@ use cosmwasm_std::{
     attr, entry_point, from_binary, to_binary, BankMsg, Binary, ContractResult, CosmosMsg, Deps,
     DepsMut, Env, IbcBasicResponse, IbcChannel, IbcChannelCloseMsg, IbcChannelConnectMsg,
     IbcChannelOpenMsg, IbcEndpoint, IbcOrder, IbcPacket, IbcPacketAckMsg, IbcPacketReceiveMsg,
-    IbcPacketTimeoutMsg, IbcReceiveResponse, Reply, Response, Storage, SubMsg, Uint128, WasmMsg,
+    IbcPacketTimeoutMsg, IbcReceiveResponse, Reply, Response, Storage, SubMsg, WasmMsg,
 };
 
 use crate::amount::{get_cw20_denom, Amount};
 use crate::error::{ContractError, Never};
+use crate::ibc_msg::{Ics20Ack, Ics20Packet, OsmoPacket, SwapAmountInAck, SwapPacket, Voucher};
 use crate::state::{
     join_ibc_paths, reduce_channel_balance, undo_reduce_channel_balance, ChannelInfo, ReplyArgs,
     ALLOW_LIST, CHANNEL_INFO, CONFIG, EXTERNAL_TOKENS, REPLY_ARGS,
 };
 use cw20::Cw20ExecuteMsg;
-use crate::ibc_msg::{Ics20Ack, Ics20Packet, Voucher};
 
 pub const ICS20_VERSION: &str = "ics20-1";
 pub const ICS20_ORDERING: IbcOrder = IbcOrder::Unordered;
@@ -30,7 +30,7 @@ fn ack_fail(err: String) -> Binary {
 }
 
 const RECEIVE_ID: u64 = 1337;
-const ACK_FAILURE_ID: u64 = 0xfa17;
+const ACK_TRANSFER_ID: u64 = 0xfa17;
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn reply(deps: DepsMut, _env: Env, reply: Reply) -> Result<Response, ContractError> {
@@ -52,7 +52,7 @@ pub fn reply(deps: DepsMut, _env: Env, reply: Reply) -> Result<Response, Contrac
                 Ok(Response::new().set_data(ack_fail(err)))
             }
         },
-        ACK_FAILURE_ID => match reply.result {
+        ACK_TRANSFER_ID => match reply.result {
             ContractResult::Ok(_) => Ok(Response::new()),
             ContractResult::Err(err) => Ok(Response::new().set_data(ack_fail(err))),
         },
@@ -295,10 +295,26 @@ pub fn ibc_packet_ack(
     _env: Env,
     msg: IbcPacketAckMsg,
 ) -> Result<IbcBasicResponse, ContractError> {
+    let packet_data: Ics20Packet = from_binary(&msg.original_packet.data)?;
     let ics20msg: Ics20Ack = from_binary(&msg.acknowledgement.data)?;
-    match ics20msg {
-        Ics20Ack::Result(_) => on_packet_success(msg.original_packet),
-        Ics20Ack::Error(err) => on_packet_failure(deps, msg.original_packet, err),
+
+    if let Some(action) = packet_data.action {
+        match action {
+            OsmoPacket::Swap(swap) => match ics20msg {
+                Ics20Ack::Result(data) => {
+                    let res: SwapAmountInAck = from_binary(&data)?;
+                    on_swap_packet_success(deps, msg.original_packet, swap, res)
+                }
+                Ics20Ack::Error(err) => {
+                    on_packet_failure(deps, msg.original_packet, format!("Swap error: {}", err))
+                }
+            },
+        }
+    } else {
+        match ics20msg {
+            Ics20Ack::Result(_) => on_packet_success(msg.original_packet),
+            Ics20Ack::Error(err) => on_packet_failure(deps, msg.original_packet, err),
+        }
     }
 }
 
@@ -348,7 +364,7 @@ fn on_packet_failure(
     let to_send = Amount::from_parts(denom.to_string(), msg.amount);
     let gas_limit = check_gas_limit(deps.as_ref(), &to_send)?;
     let send = send_amount(to_send, msg.sender.clone(), voucher.our_chain);
-    let mut submsg = SubMsg::reply_on_error(send, ACK_FAILURE_ID);
+    let mut submsg = SubMsg::reply_on_error(send, ACK_TRANSFER_ID);
     submsg.gas_limit = gas_limit;
 
     // similar event messages like ibctransfer module
@@ -363,6 +379,40 @@ fn on_packet_failure(
         .add_attribute("error", err);
 
     Ok(res)
+}
+
+fn on_swap_packet_success(
+    deps: DepsMut,
+    packet: IbcPacket,
+    swap_packet: SwapPacket,
+    res: SwapAmountInAck,
+) -> Result<IbcBasicResponse, ContractError> {
+    let attributes = vec![
+        attr("action", "acknowledge_swap"),
+        attr("receiver", &swap_packet.sender),
+        attr("amount", &res.amount.to_string()),
+        attr("denom", &res.denom),
+        attr("success", "true"),
+    ];
+
+    let channel = packet.src.channel_id.clone();
+    let voucher = parse_voucher(deps.storage, res.denom, &packet.dest)?;
+    let denom = voucher.denom.as_str();
+
+    if voucher.our_chain {
+        // make sure we have enough balance for this
+        reduce_channel_balance(deps.storage, &channel, denom, res.amount)?;
+    }
+
+    let to_send = Amount::from_parts(denom.to_string(), res.amount);
+    let gas_limit = check_gas_limit(deps.as_ref(), &to_send)?;
+    let send = send_amount(to_send, swap_packet.sender, voucher.our_chain);
+    let mut submsg = SubMsg::reply_on_error(send, ACK_TRANSFER_ID);
+    submsg.gas_limit = gas_limit;
+
+    Ok(IbcBasicResponse::new()
+        .add_submessage(submsg)
+        .add_attributes(attributes))
 }
 
 fn send_amount(amount: Amount, recipient: String, our_chain: bool) -> CosmosMsg {
@@ -401,11 +451,13 @@ mod test {
     use crate::test_helpers::*;
 
     use crate::contract::{execute, query_channel};
+    use crate::ibc_msg::{OsmoPacket, SwapAmountInRoute, SwapPacket};
     use crate::msg::{ExecuteMsg, TransferMsg};
     use cosmwasm_std::testing::{mock_env, mock_info};
-    use cosmwasm_std::{coins, to_vec, IbcEndpoint, IbcMsg, IbcTimeout, Timestamp, Uint64};
+    use cosmwasm_std::{
+        coins, to_vec, IbcEndpoint, IbcMsg, IbcTimeout, Timestamp, Uint128, Uint64,
+    };
     use cw20::Cw20ReceiveMsg;
-    use crate::ibc_msg::{OsmoPacket, SwapAmountInRoute, SwapPacket};
 
     #[test]
     fn check_ack_json() {
@@ -545,11 +597,11 @@ mod test {
         assert_eq!(ack, no_funds);
 
         // we send some cw20 tokens over
-        let transfer = TransferMsg {
+        let transfer = ExecuteMsg::Transfer(TransferMsg {
             channel: send_channel.to_string(),
             remote_address: "remote-rcpt".to_string(),
             timeout: None,
-        };
+        });
         let msg = ExecuteMsg::Receive(Cw20ReceiveMsg {
             sender: "local-sender".to_string(),
             amount: Uint128::new(987654321),
