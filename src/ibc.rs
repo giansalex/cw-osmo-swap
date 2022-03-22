@@ -7,7 +7,7 @@ use cosmwasm_std::{
 
 use crate::amount::{get_cw20_denom, Amount};
 use crate::error::{ContractError, Never};
-use crate::ibc_msg::{Ics20Ack, Ics20Packet, OsmoPacket, SwapAmountInAck, SwapPacket, Voucher};
+use crate::ibc_msg::{Ics20Ack, Ics20Packet, OsmoPacket, SwapAmountInAck, Voucher};
 use crate::state::{
     join_ibc_paths, reduce_channel_balance, undo_reduce_channel_balance, ChannelInfo, ReplyArgs,
     ALLOW_LIST, CHANNEL_INFO, CONFIG, EXTERNAL_TOKENS, REPLY_ARGS,
@@ -300,15 +300,23 @@ pub fn ibc_packet_ack(
 
     if let Some(action) = packet_data.action {
         match action {
-            OsmoPacket::Swap(swap) => match ics20msg {
-                Ics20Ack::Result(data) => {
-                    let res: SwapAmountInAck = from_binary(&data)?;
-                    on_swap_packet_success(deps, msg.original_packet, swap, res)
-                }
-                Ics20Ack::Error(err) => {
-                    on_packet_failure(deps, msg.original_packet, format!("Swap error: {}", err))
-                }
-            },
+            OsmoPacket::Swap(swap) => {
+                on_gamm_packet(deps, msg, swap.sender, ics20msg, "acknowledge_swap")
+            }
+            OsmoPacket::JoinPool(_) => on_gamm_packet(
+                deps,
+                msg,
+                packet_data.sender,
+                ics20msg,
+                "acknowledge_join_pool",
+            ),
+            OsmoPacket::ExitPool(_) => on_gamm_packet(
+                deps,
+                msg,
+                packet_data.sender,
+                ics20msg,
+                "acknowledge_exit_pool",
+            ),
         }
     } else {
         match ics20msg {
@@ -381,15 +389,33 @@ fn on_packet_failure(
     Ok(res)
 }
 
-fn on_swap_packet_success(
+fn on_gamm_packet(
+    deps: DepsMut,
+    msg: IbcPacketAckMsg,
+    sender: String,
+    ics20msg: Ics20Ack,
+    action_label: &str,
+) -> Result<IbcBasicResponse, ContractError> {
+    match ics20msg {
+        Ics20Ack::Result(data) => {
+            let res: SwapAmountInAck = from_binary(&data)?;
+            on_gamm_packet_success(deps, msg.original_packet, sender, res, action_label)
+        }
+        Ics20Ack::Error(err) => {
+            on_packet_failure(deps, msg.original_packet, format!("Gamm error: {}", err))
+        }
+    }
+}
+fn on_gamm_packet_success(
     deps: DepsMut,
     packet: IbcPacket,
-    swap_packet: SwapPacket,
+    sender: String,
     res: SwapAmountInAck,
+    action_label: &str,
 ) -> Result<IbcBasicResponse, ContractError> {
     let attributes = vec![
-        attr("action", "acknowledge_swap"),
-        attr("receiver", &swap_packet.sender),
+        attr("action", action_label),
+        attr("receiver", &sender),
         attr("amount", &res.amount.to_string()),
         attr("denom", &res.denom),
         attr("success", "true"),
@@ -406,7 +432,7 @@ fn on_swap_packet_success(
 
     let to_send = Amount::from_parts(denom.to_string(), res.amount);
     let gas_limit = check_gas_limit(deps.as_ref(), &to_send)?;
-    let send = send_amount(to_send, swap_packet.sender, voucher.our_chain);
+    let send = send_amount(to_send, sender, voucher.our_chain);
     let mut submsg = SubMsg::reply_on_error(send, ACK_TRANSFER_ID);
     submsg.gas_limit = gas_limit;
 

@@ -11,11 +11,14 @@ use cw_storage_plus::Bound;
 
 use crate::amount::Amount;
 use crate::error::ContractError;
-use crate::ibc_msg::{Ics20Packet, OsmoPacket, SwapAmountInRoute, SwapPacket};
+use crate::ibc_msg::{
+    ExitPoolPacket, Ics20Packet, JoinPoolPacket, OsmoPacket, SwapAmountInRoute, SwapPacket,
+};
 use crate::msg::{
     AllowMsg, AllowedInfo, AllowedResponse, AllowedTokenInfo, AllowedTokenResponse,
-    ChannelResponse, ConfigResponse, ExecuteMsg, ExternalTokenMsg, InitMsg, ListAllowedResponse,
-    ListChannelsResponse, ListExternalTokensResponse, PortResponse, QueryMsg, SwapMsg, TransferMsg,
+    ChannelResponse, ConfigResponse, ExecuteMsg, ExitPoolMsg, ExternalTokenMsg, InitMsg,
+    JoinPoolMsg, ListAllowedResponse, ListChannelsResponse, ListExternalTokensResponse,
+    PortResponse, QueryMsg, SwapMsg, TransferMsg,
 };
 use crate::state::{
     find_external_token, increase_channel_balance, join_ibc_paths, AllowInfo, Config,
@@ -73,6 +76,14 @@ pub fn execute(
             let coin = one_coin(&info)?;
             execute_swap(deps, env, msg, Amount::Native(coin), info.sender)
         }
+        ExecuteMsg::JoinPool(pool) => {
+            let coin = one_coin(&info)?;
+            execute_join_pool(deps, env, pool, Amount::Native(coin), info.sender)
+        }
+        ExecuteMsg::ExitPool(pool) => {
+            let coin = one_coin(&info)?;
+            execute_exit_pool(deps, env, pool, Amount::Native(coin), info.sender)
+        }
         ExecuteMsg::Allow(allow) => execute_allow(deps, env, info, allow),
         ExecuteMsg::AllowExternalToken(token) => allow_external_token(deps, env, info, token),
         ExecuteMsg::UpdateAdmin { admin } => {
@@ -107,6 +118,12 @@ pub fn execute_receive(
         ),
         ExecuteMsg::Swap(swap) => {
             execute_swap(deps, env, swap, amount, api.addr_validate(&wrapper.sender)?)
+        }
+        ExecuteMsg::JoinPool(pool) => {
+            execute_join_pool(deps, env, pool, amount, api.addr_validate(&wrapper.sender)?)
+        }
+        ExecuteMsg::ExitPool(pool) => {
+            execute_exit_pool(deps, env, pool, amount, api.addr_validate(&wrapper.sender)?)
         }
         _ => Err(ContractError::UnknownRequest {}),
     }
@@ -279,6 +296,182 @@ pub fn execute_swap(
     let res = Response::new()
         .add_message(msg)
         .add_attribute("action", "swap")
+        .add_attribute("sender", &packet.sender)
+        .add_attribute("denom", &packet.denom)
+        .add_attribute("amount", &packet.amount.to_string());
+
+    let burn = safe_burn(amount, our_chain);
+    if let Some(msg) = burn {
+        return Ok(res.add_message(msg));
+    }
+
+    Ok(res)
+}
+
+pub fn execute_join_pool(
+    deps: DepsMut,
+    env: Env,
+    msg: JoinPoolMsg,
+    amount: Amount,
+    sender: Addr,
+) -> Result<Response, ContractError> {
+    if amount.is_empty() {
+        return Err(ContractError::NoFunds {});
+    }
+    // ensure the requested channel is registered
+    if !CHANNEL_INFO.has(deps.storage, &msg.channel) {
+        return Err(ContractError::NoSuchChannel { id: msg.channel });
+    }
+
+    // if cw20 token, ensure it is whitelisted
+    let mut denom = amount.denom();
+    let mut our_chain = true;
+    if let Amount::Cw20(coin) = &amount {
+        let addr = deps.api.addr_validate(&coin.address)?;
+        ALLOW_LIST
+            .may_load(deps.storage, &addr)?
+            .ok_or(ContractError::NotOnAllowList)?;
+
+        let token = find_external_token(deps.storage, coin.clone().address)?;
+        if let Some(ext_denom) = token {
+            // TODO: add port_id to external_token info
+            let q = WasmQuery::ContractInfo {
+                contract_addr: env.contract.address.into(),
+            };
+            let res: ContractInfoResponse = deps.querier.query(&q.into())?;
+            let ibc_prefix = join_ibc_paths(res.ibc_port.unwrap().as_str(), msg.channel.as_str());
+
+            denom = join_ibc_paths(ibc_prefix.as_str(), ext_denom.as_str());
+            our_chain = false;
+        }
+    };
+
+    // delta from user is in seconds
+    let timeout_delta = match msg.timeout {
+        Some(t) => t,
+        None => CONFIG.load(deps.storage)?.default_timeout,
+    };
+    // timeout is in nanoseconds
+    let timeout = env.block.time.plus_seconds(timeout_delta);
+
+    // build swap packet
+    let gamm_packet = JoinPoolPacket {
+        pool_id: msg.pool,
+        share_out_min_amount: msg.share_min_out,
+    };
+
+    let packet = Ics20Packet::new(
+        amount.amount(),
+        denom,
+        sender.as_ref(),
+        "", // swap-mod will replace this address
+        Some(OsmoPacket::JoinPool(gamm_packet)),
+    );
+    packet.validate()?;
+
+    if our_chain {
+        increase_channel_balance(deps.storage, &msg.channel, &amount.denom(), amount.amount())?;
+    }
+
+    // prepare ibc message
+    let msg = IbcMsg::SendPacket {
+        channel_id: msg.channel,
+        data: to_binary(&packet)?,
+        timeout: timeout.into(),
+    };
+
+    // send response
+    let res = Response::new()
+        .add_message(msg)
+        .add_attribute("action", "join_pool")
+        .add_attribute("sender", &packet.sender)
+        .add_attribute("denom", &packet.denom)
+        .add_attribute("amount", &packet.amount.to_string());
+
+    let burn = safe_burn(amount, our_chain);
+    if let Some(msg) = burn {
+        return Ok(res.add_message(msg));
+    }
+
+    Ok(res)
+}
+
+pub fn execute_exit_pool(
+    deps: DepsMut,
+    env: Env,
+    msg: ExitPoolMsg,
+    amount: Amount,
+    sender: Addr,
+) -> Result<Response, ContractError> {
+    if amount.is_empty() {
+        return Err(ContractError::NoFunds {});
+    }
+    // ensure the requested channel is registered
+    if !CHANNEL_INFO.has(deps.storage, &msg.channel) {
+        return Err(ContractError::NoSuchChannel { id: msg.channel });
+    }
+
+    // if cw20 token, ensure it is whitelisted
+    let mut denom = amount.denom();
+    let mut our_chain = true;
+    if let Amount::Cw20(coin) = &amount {
+        let addr = deps.api.addr_validate(&coin.address)?;
+        ALLOW_LIST
+            .may_load(deps.storage, &addr)?
+            .ok_or(ContractError::NotOnAllowList)?;
+
+        let token = find_external_token(deps.storage, coin.clone().address)?;
+        if let Some(ext_denom) = token {
+            // TODO: add port_id to external_token info
+            let q = WasmQuery::ContractInfo {
+                contract_addr: env.contract.address.into(),
+            };
+            let res: ContractInfoResponse = deps.querier.query(&q.into())?;
+            let ibc_prefix = join_ibc_paths(res.ibc_port.unwrap().as_str(), msg.channel.as_str());
+
+            denom = join_ibc_paths(ibc_prefix.as_str(), ext_denom.as_str());
+            our_chain = false;
+        }
+    };
+
+    // delta from user is in seconds
+    let timeout_delta = match msg.timeout {
+        Some(t) => t,
+        None => CONFIG.load(deps.storage)?.default_timeout,
+    };
+    // timeout is in nanoseconds
+    let timeout = env.block.time.plus_seconds(timeout_delta);
+
+    // build swap packet
+    let gamm_packet = ExitPoolPacket {
+        token_out_denom: msg.token_out,
+        token_out_min_amount: msg.min_amount_out,
+    };
+
+    let packet = Ics20Packet::new(
+        amount.amount(),
+        denom,
+        sender.as_ref(),
+        "", // swap-mod will replace this address
+        Some(OsmoPacket::ExitPool(gamm_packet)),
+    );
+    packet.validate()?;
+
+    if our_chain {
+        increase_channel_balance(deps.storage, &msg.channel, &amount.denom(), amount.amount())?;
+    }
+
+    // prepare ibc message
+    let msg = IbcMsg::SendPacket {
+        channel_id: msg.channel,
+        data: to_binary(&packet)?,
+        timeout: timeout.into(),
+    };
+
+    // send response
+    let res = Response::new()
+        .add_message(msg)
+        .add_attribute("action", "exit_pool")
         .add_attribute("sender", &packet.sender)
         .add_attribute("denom", &packet.denom)
         .add_attribute("amount", &packet.amount.to_string());

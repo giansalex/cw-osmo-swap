@@ -40,6 +40,10 @@ pub enum ExecuteMsg {
     Transfer(TransferMsg),
     /// This allows us to swap tokens
     Swap(SwapMsg),
+    /// This allows us to add liquidity
+    JoinPool(JoinPoolMsg),
+    /// This allows us to remove liquidity
+    ExitPool(ExitPoolMsg),
     /// This must be called by gov_contract, will allow a new cw20 token to be sent
     Allow(AllowMsg),
     /// This must be called by gov_contract, will allow a new external token to be received
@@ -52,6 +56,22 @@ pub enum ExecuteMsg {
 pub struct SwapMsg {
     pub channel: String,
     pub pool: Uint64,
+    pub token_out: String,
+    pub min_amount_out: Uint128,
+    pub timeout: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct JoinPoolMsg {
+    pub channel: String,
+    pub pool: Uint64,
+    pub share_min_out: Uint128,
+    pub timeout: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct ExitPoolMsg {
+    pub channel: String,
     pub token_out: String,
     pub min_amount_out: Uint128,
     pub timeout: Option<u64>,

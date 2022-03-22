@@ -18,6 +18,20 @@ pub struct SwapAmountInRoute {
     pub token_out_denom: String,
 }
 
+/// JoinPool Packet
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct JoinPoolPacket {
+    pub pool_id: Uint64,
+    pub share_out_min_amount: Uint128,
+}
+
+/// ExitPool Packet
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct ExitPoolPacket {
+    pub token_out_denom: String,
+    pub token_out_min_amount: Uint128,
+}
+
 /// This is the success response we send on ack for PacketMsg::Balance.
 /// Just acknowledge success or error
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -48,6 +62,8 @@ pub struct Ics20Packet {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub enum OsmoPacket {
     Swap(SwapPacket),
+    JoinPool(JoinPoolPacket),
+    ExitPool(ExitPoolPacket),
 }
 
 impl Ics20Packet {
