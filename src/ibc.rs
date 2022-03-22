@@ -380,7 +380,6 @@ fn on_packet_failure(
         .add_submessage(submsg)
         .add_attribute("action", "acknowledge")
         .add_attribute("sender", msg.sender)
-        .add_attribute("receiver", msg.receiver)
         .add_attribute("denom", denom)
         .add_attribute("amount", msg.amount.to_string())
         .add_attribute("success", "false")
