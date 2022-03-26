@@ -530,7 +530,7 @@ mod test {
             Some(OsmoPacket::Swap(swap_packet)),
         );
         // Example message generated from the SDK
-        let expected = r#"{"amount":"1000","denom":"uosmo","receiver":"wasm1fucynrfkrt684pm8jrt8la5h2csvs5cnldcgqc","sender":"cosmos1zedxv25ah8fksmg2lzrndrpkvsjqgk4zt5ff7n","action":{"Swap":{"sender":"wasm1fucynrfkrt684pm8jrt8la5h2csvs5cnldcgqc","routes":[{"pool_id":"1","token_out_denom":"ibc/AAAAAFFF"}],"token_out_min_amount":"1"}}}"#;
+        let expected = r#"{"amount":"1000","denom":"uosmo","receiver":"wasm1fucynrfkrt684pm8jrt8la5h2csvs5cnldcgqc","sender":"cosmos1zedxv25ah8fksmg2lzrndrpkvsjqgk4zt5ff7n","action":{"swap":{"sender":"wasm1fucynrfkrt684pm8jrt8la5h2csvs5cnldcgqc","routes":[{"pool_id":"1","token_out_denom":"ibc/AAAAAFFF"}],"token_out_min_amount":"1"}}}"#;
 
         let encdoded = String::from_utf8(to_vec(&packet).unwrap()).unwrap();
         assert_eq!(expected, encdoded.as_str());

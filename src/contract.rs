@@ -183,7 +183,6 @@ pub fn execute_transfer(
         &msg.remote_address,
         None,
     );
-    packet.validate()?;
 
     if our_chain {
         // Update the balance now (optimistically) like ibctransfer modules.
@@ -279,7 +278,6 @@ pub fn execute_swap(
         "", // swap-mod will replace this address
         Some(OsmoPacket::Swap(swap_packet)),
     );
-    packet.validate()?;
 
     if our_chain {
         increase_channel_balance(deps.storage, &msg.channel, &amount.denom(), amount.amount())?;
@@ -367,7 +365,6 @@ pub fn execute_join_pool(
         "", // swap-mod will replace this address
         Some(OsmoPacket::JoinPool(gamm_packet)),
     );
-    packet.validate()?;
 
     if our_chain {
         increase_channel_balance(deps.storage, &msg.channel, &amount.denom(), amount.amount())?;
@@ -455,7 +452,6 @@ pub fn execute_exit_pool(
         "", // swap-mod will replace this address
         Some(OsmoPacket::ExitPool(gamm_packet)),
     );
-    packet.validate()?;
 
     if our_chain {
         increase_channel_balance(deps.storage, &msg.channel, &amount.denom(), amount.amount())?;

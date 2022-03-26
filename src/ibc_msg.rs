@@ -1,7 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::ContractError;
 use cosmwasm_std::{Binary, Uint128, Uint64};
 
 /// Swap Packet
@@ -81,14 +80,6 @@ impl Ics20Packet {
             sender: sender.to_string(),
             receiver: receiver.to_string(),
             action: action_packet,
-        }
-    }
-
-    pub fn validate(&self) -> Result<(), ContractError> {
-        if self.amount.u128() > (u64::MAX as u128) {
-            Err(ContractError::AmountOverflow {})
-        } else {
-            Ok(())
         }
     }
 }
