@@ -321,7 +321,7 @@ pub fn ibc_packet_ack(
     } else {
         match ics20msg {
             Ics20Ack::Result(_) => on_packet_success(msg.original_packet),
-            Ics20Ack::Error(err) => on_packet_failure(deps, msg.original_packet, err),
+            Ics20Ack::Error(err) => on_packet_failure(deps, msg.original_packet, "acknowledge", err),
         }
     }
 }
@@ -334,7 +334,7 @@ pub fn ibc_packet_timeout(
     msg: IbcPacketTimeoutMsg,
 ) -> Result<IbcBasicResponse, ContractError> {
     let packet = msg.packet;
-    on_packet_failure(deps, packet, "timeout".to_string())
+    on_packet_failure(deps, packet, "acknowledge", "timeout".to_string())
 }
 
 // update the balance stored on this (channel, denom) index
@@ -358,6 +358,7 @@ fn on_packet_success(packet: IbcPacket) -> Result<IbcBasicResponse, ContractErro
 fn on_packet_failure(
     deps: DepsMut,
     packet: IbcPacket,
+    action_label: &str,
     err: String,
 ) -> Result<IbcBasicResponse, ContractError> {
     let msg: Ics20Packet = from_binary(&packet.data)?;
@@ -378,7 +379,7 @@ fn on_packet_failure(
     // similar event messages like ibctransfer module
     let res = IbcBasicResponse::new()
         .add_submessage(submsg)
-        .add_attribute("action", "acknowledge")
+        .add_attribute("action", action_label)
         .add_attribute("sender", msg.sender)
         .add_attribute("denom", denom)
         .add_attribute("amount", msg.amount.to_string())
@@ -401,7 +402,7 @@ fn on_gamm_packet(
             on_gamm_packet_success(deps, msg.original_packet, sender, res, action_label)
         }
         Ics20Ack::Error(err) => {
-            on_packet_failure(deps, msg.original_packet, format!("Gamm error: {}", err))
+            on_packet_failure(deps, msg.original_packet, action_label, format!("Gamm error: {}", err))
         }
     }
 }
