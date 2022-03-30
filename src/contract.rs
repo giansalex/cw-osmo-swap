@@ -263,7 +263,6 @@ pub fn execute_swap(
 
     // build swap packet
     let swap_packet = SwapPacket {
-        sender: sender.to_string(),
         routes: vec![SwapAmountInRoute {
             pool_id: msg.pool,
             token_out_denom: msg.token_out,
@@ -567,7 +566,7 @@ pub fn allow_external_token(
     EXTERNAL_TOKENS.save(deps.storage, &allow.denom, &set)?;
     let set_allow = AllowMsg {
         contract: allow.contract.to_owned(),
-        gas_limit: None
+        gas_limit: None,
     };
     add_allow_token(deps, set_allow)?;
 

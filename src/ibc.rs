@@ -300,8 +300,8 @@ pub fn ibc_packet_ack(
 
     if let Some(action) = packet_data.action {
         match action {
-            OsmoPacket::Swap(swap) => {
-                on_gamm_packet(deps, msg, swap.sender, ics20msg, "acknowledge_swap")
+            OsmoPacket::Swap(_) => {
+                on_gamm_packet(deps, msg, packet_data.sender, ics20msg, "acknowledge_swap")
             }
             OsmoPacket::JoinPool(_) => on_gamm_packet(
                 deps,
@@ -321,7 +321,9 @@ pub fn ibc_packet_ack(
     } else {
         match ics20msg {
             Ics20Ack::Result(_) => on_packet_success(msg.original_packet),
-            Ics20Ack::Error(err) => on_packet_failure(deps, msg.original_packet, "acknowledge", err),
+            Ics20Ack::Error(err) => {
+                on_packet_failure(deps, msg.original_packet, "acknowledge", err)
+            }
         }
     }
 }
@@ -401,9 +403,12 @@ fn on_gamm_packet(
             let res: SwapAmountInAck = from_binary(&data)?;
             on_gamm_packet_success(deps, msg.original_packet, sender, res, action_label)
         }
-        Ics20Ack::Error(err) => {
-            on_packet_failure(deps, msg.original_packet, action_label, format!("Gamm error: {}", err))
-        }
+        Ics20Ack::Error(err) => on_packet_failure(
+            deps,
+            msg.original_packet,
+            action_label,
+            format!("Gamm error: {}", err),
+        ),
     }
 }
 fn on_gamm_packet_success(
@@ -516,7 +521,6 @@ mod test {
     #[test]
     fn check_swap_packet_json() {
         let swap_packet = SwapPacket {
-            sender: "wasm1fucynrfkrt684pm8jrt8la5h2csvs5cnldcgqc".to_string(),
             routes: vec![SwapAmountInRoute {
                 token_out_denom: "ibc/AAAAAFFF".to_string(),
                 pool_id: Uint64::new(1),
@@ -531,7 +535,7 @@ mod test {
             Some(OsmoPacket::Swap(swap_packet)),
         );
         // Example message generated from the SDK
-        let expected = r#"{"amount":"1000","denom":"uosmo","receiver":"wasm1fucynrfkrt684pm8jrt8la5h2csvs5cnldcgqc","sender":"cosmos1zedxv25ah8fksmg2lzrndrpkvsjqgk4zt5ff7n","action":{"swap":{"sender":"wasm1fucynrfkrt684pm8jrt8la5h2csvs5cnldcgqc","routes":[{"pool_id":"1","token_out_denom":"ibc/AAAAAFFF"}],"token_out_min_amount":"1"}}}"#;
+        let expected = r#"{"amount":"1000","denom":"uosmo","receiver":"wasm1fucynrfkrt684pm8jrt8la5h2csvs5cnldcgqc","sender":"cosmos1zedxv25ah8fksmg2lzrndrpkvsjqgk4zt5ff7n","action":{"swap":{"routes":[{"pool_id":"1","token_out_denom":"ibc/AAAAAFFF"}],"token_out_min_amount":"1"}}}"#;
 
         let encdoded = String::from_utf8(to_vec(&packet).unwrap()).unwrap();
         assert_eq!(expected, encdoded.as_str());
