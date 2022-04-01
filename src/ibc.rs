@@ -388,6 +388,10 @@ fn on_packet_failure(
         .add_attribute("success", "false")
         .add_attribute("error", err);
 
+    if !msg.receiver.is_empty() {
+        return Ok(res.add_attribute("receiver", &msg.receiver));
+    }
+
     Ok(res)
 }
 
