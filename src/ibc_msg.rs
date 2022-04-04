@@ -30,6 +30,21 @@ pub struct ExitPoolPacket {
     pub token_out_min_amount: Uint128,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct LockPacket {
+    pub duration: Uint64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct ClaimPacket {
+    pub denom: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct UnlockPacket {
+    pub id: Uint64,
+}
+
 /// This is the success response we send on ack for PacketMsg::Balance.
 /// Just acknowledge success or error
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -63,6 +78,10 @@ pub enum OsmoPacket {
     Swap(SwapPacket),
     JoinPool(JoinPoolPacket),
     ExitPool(ExitPoolPacket),
+    LockupAccount {},
+    Lock(LockPacket),
+    Claim(ClaimPacket),
+    Unlock(UnlockPacket),
 }
 
 impl Ics20Packet {

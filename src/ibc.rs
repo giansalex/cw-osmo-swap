@@ -317,6 +317,7 @@ pub fn ibc_packet_ack(
                 ics20msg,
                 "acknowledge_exit_pool",
             ),
+            _ => Err(ContractError::Unauthorized{}),
         }
     } else {
         match ics20msg {

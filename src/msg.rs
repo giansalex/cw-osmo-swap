@@ -15,6 +15,8 @@ pub struct InitMsg {
     pub gov_contract: String,
     /// initial allowlist - all cw20 tokens we will send must be previously allowed by governance
     pub allowlist: Vec<AllowMsg>,
+    /// Default remote denom for send standalone actions
+    pub default_remote_denom: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -44,6 +46,14 @@ pub enum ExecuteMsg {
     JoinPool(JoinPoolMsg),
     /// This allows us to remove liquidity
     ExitPool(ExitPoolMsg),
+    /// Create lockup account in osmosis.
+    CreateLockup(CreateLockupMsg),
+    /// Lock Tokens (Start Farming)
+    LockTokens(LockTokensMsg),
+    /// This allows us to claim rewards and LP tokens (Unlocked).
+    ClaimTokens(ClaimTokensMsg),
+    /// Begin Unlocking tokens
+    UnLockTokens(UnlockTokensMsg),
     /// This must be called by gov_contract, will allow a new cw20 token to be sent
     Allow(AllowMsg),
     /// This must be called by gov_contract, will allow a new external token to be received
@@ -75,6 +85,33 @@ pub struct ExitPoolMsg {
     pub token_out: String,
     pub min_amount_out: Uint128,
     pub timeout: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct CreateLockupMsg {
+    pub channel: String,
+    pub timeout: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct LockTokensMsg {
+    pub channel: String,
+    pub timeout: Option<u64>,
+    pub duration: Uint64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct ClaimTokensMsg {
+    pub channel: String,
+    pub timeout: Option<u64>,
+    pub denom: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct UnlockTokensMsg {
+    pub channel: String,
+    pub timeout: Option<u64>,
+    pub lock_id: Uint64,
 }
 
 /// This is the message we accept via Receive

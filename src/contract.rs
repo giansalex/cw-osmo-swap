@@ -8,19 +8,9 @@ use cw_storage_plus::Bound;
 
 use crate::amount::Amount;
 use crate::error::ContractError;
-use crate::ibc_msg::{
-    ExitPoolPacket, Ics20Packet, JoinPoolPacket, OsmoPacket, SwapAmountInRoute, SwapPacket,
-};
-use crate::msg::{
-    AllowMsg, AllowedInfo, AllowedResponse, AllowedTokenInfo, AllowedTokenResponse,
-    ChannelResponse, ConfigResponse, ExecuteMsg, ExitPoolMsg, ExternalTokenMsg, InitMsg,
-    JoinPoolMsg, ListAllowedResponse, ListChannelsResponse, ListExternalTokensResponse,
-    QueryMsg, SwapMsg, TransferMsg,
-};
-use crate::state::{
-    find_external_token, increase_channel_balance, join_ibc_paths, AllowInfo, Config,
-    ExternalTokenInfo, ADMIN, ALLOW_LIST, CHANNEL_INFO, CHANNEL_STATE, CONFIG, EXTERNAL_TOKENS,
-};
+use crate::ibc_msg::{ClaimPacket, ExitPoolPacket, Ics20Packet, JoinPoolPacket, LockPacket, OsmoPacket, SwapAmountInRoute, SwapPacket, UnlockPacket};
+use crate::msg::{AllowMsg, AllowedInfo, AllowedResponse, AllowedTokenInfo, AllowedTokenResponse, ChannelResponse, ConfigResponse, ExecuteMsg, ExitPoolMsg, ExternalTokenMsg, InitMsg, JoinPoolMsg, ListAllowedResponse, ListChannelsResponse, ListExternalTokensResponse, QueryMsg, SwapMsg, TransferMsg, LockTokensMsg, CreateLockupMsg, ClaimTokensMsg, UnlockTokensMsg};
+use crate::state::{find_external_token, increase_channel_balance, join_ibc_paths, AllowInfo, Config, ExternalTokenInfo, ADMIN, ALLOW_LIST, CHANNEL_INFO, CHANNEL_STATE, CONFIG, EXTERNAL_TOKENS, LOCKUP};
 use cw_utils::{maybe_addr, nonpayable, one_coin};
 
 // version info for migration info
@@ -38,6 +28,7 @@ pub fn instantiate(
     let cfg = Config {
         default_timeout: msg.default_timeout,
         init_channel: false,
+        default_remote_denom: msg.default_remote_denom,
     };
     CONFIG.save(deps.storage, &cfg)?;
 
@@ -81,6 +72,22 @@ pub fn execute(
             let coin = one_coin(&info)?;
             execute_exit_pool(deps, env, pool, Amount::Native(coin), info.sender)
         }
+        ExecuteMsg::CreateLockup(msg) => {
+            nonpayable(&info)?;
+            execute_create_lockup(deps, env, msg, info.sender)
+        }
+        ExecuteMsg::LockTokens(msg) => {
+            let coin = one_coin(&info)?;
+            execute_lock_tokens(deps, env, msg, Amount::Native(coin), info.sender)
+        }
+        ExecuteMsg::ClaimTokens(msg) => {
+            nonpayable(&info)?;
+            execute_claim_tokens(deps, env, msg, info.sender)
+        }
+        ExecuteMsg::UnLockTokens(msg) => {
+            nonpayable(&info)?;
+            execute_unlock_tokens(deps, env, msg, info.sender)
+        }
         ExecuteMsg::Allow(allow) => execute_allow(deps, env, info, allow),
         ExecuteMsg::AllowExternalToken(token) => allow_external_token(deps, env, info, token),
         ExecuteMsg::UpdateAdmin { admin } => {
@@ -121,6 +128,9 @@ pub fn execute_receive(
         }
         ExecuteMsg::ExitPool(pool) => {
             execute_exit_pool(deps, env, pool, amount, api.addr_validate(&wrapper.sender)?)
+        }
+        ExecuteMsg::LockTokens(msg) => {
+            execute_lock_tokens(deps, env, msg, amount, api.addr_validate(&wrapper.sender)?)
         }
         _ => Err(ContractError::UnknownRequest {}),
     }
@@ -223,6 +233,54 @@ pub fn execute_transfer_with_action(
     Ok(res)
 }
 
+pub fn execute_only_action(
+    deps: DepsMut,
+    env: Env,
+    msg: TransferMsg,
+    sender: Addr,
+    action: OsmoPacket,
+    action_label: &str,
+) -> Result<Response, ContractError> {
+    // ensure the requested channel is registered
+    if !CHANNEL_INFO.has(deps.storage, &msg.channel) {
+        return Err(ContractError::NoSuchChannel { id: msg.channel });
+    }
+
+    let config = CONFIG.load(deps.storage)?;
+    // delta from user is in seconds
+    let timeout_delta = match msg.timeout {
+        Some(t) => t,
+        None => config.default_timeout,
+    };
+    // timeout is in nanoseconds
+    let timeout = env.block.time.plus_seconds(timeout_delta);
+
+    // build ics20 packet
+    let packet = Ics20Packet::new(
+        0u8.into(),
+        config.default_remote_denom,
+        sender.as_ref(),
+        &msg.remote_address,
+        Some(action),
+    );
+
+    // prepare ibc message
+    let msg: CosmosMsg = IbcMsg::SendPacket {
+        channel_id: msg.channel,
+        data: to_binary(&packet)?,
+        timeout: timeout.into(),
+    }
+    .into();
+
+    // send response
+    let res = Response::new()
+        .add_message(msg)
+        .add_attribute("action", action_label)
+        .add_attribute("sender", &packet.sender);
+
+    Ok(res)
+}
+
 fn get_ibc_full_denom(
     deps: &DepsMut,
     channel: &str,
@@ -297,6 +355,95 @@ pub fn execute_exit_pool(
     };
 
     execute_transfer_with_action(deps, env, transfer_msg, amount, sender, Some(OsmoPacket::ExitPool(gamm_packet)), "exit_pool")
+}
+
+pub fn execute_create_lockup(
+    deps: DepsMut,
+    env: Env,
+    msg: CreateLockupMsg,
+    sender: Addr,
+) -> Result<Response, ContractError> {
+    let lockup_key = (msg.channel.as_str(), sender.as_str());
+    if LOCKUP.has(deps.storage, lockup_key) {
+        return Err(ContractError::LockupAccountFound {});
+    }
+
+    let gamm_packet = OsmoPacket::LockupAccount{};
+    let transfer_msg = TransferMsg {
+        channel: msg.channel,
+        remote_address: String::new(),
+        timeout: msg.timeout,
+    };
+
+    execute_only_action(deps, env, transfer_msg, sender, gamm_packet, "create_lockup")
+}
+
+pub fn execute_lock_tokens(
+    deps: DepsMut,
+    env: Env,
+    msg: LockTokensMsg,
+    amount: Amount,
+    sender: Addr,
+) -> Result<Response, ContractError> {
+    assert_lockup_owner(deps.as_ref(), msg.channel.as_str(), sender.as_str())?;
+
+    let gamm_packet = OsmoPacket::Lock(LockPacket{duration: msg.duration});
+    let transfer_msg = TransferMsg {
+        channel: msg.channel,
+        remote_address: String::new(),
+        timeout: msg.timeout,
+    };
+
+    execute_transfer_with_action(deps, env, transfer_msg, amount, sender, Some(gamm_packet), "lock_tokens")
+}
+
+pub fn execute_claim_tokens(
+    deps: DepsMut,
+    env: Env,
+    msg: ClaimTokensMsg,
+    sender: Addr,
+) -> Result<Response, ContractError> {
+    assert_lockup_owner(deps.as_ref(), msg.channel.as_str(), sender.as_str())?;
+
+    let gamm_packet = OsmoPacket::Claim(ClaimPacket{denom: msg.denom});
+    let transfer_msg = TransferMsg {
+        channel: msg.channel,
+        remote_address: String::new(),
+        timeout: msg.timeout,
+    };
+
+    execute_only_action(deps, env, transfer_msg, sender, gamm_packet, "claim_tokens")
+}
+
+pub fn execute_unlock_tokens(
+    deps: DepsMut,
+    env: Env,
+    msg: UnlockTokensMsg,
+    sender: Addr,
+) -> Result<Response, ContractError> {
+    assert_lockup_owner(deps.as_ref(), msg.channel.as_str(), sender.as_str())?;
+
+    let gamm_packet = OsmoPacket::Unlock(UnlockPacket{id: msg.lock_id});
+    let transfer_msg = TransferMsg {
+        channel: msg.channel,
+        remote_address: String::new(),
+        timeout: msg.timeout,
+    };
+
+    execute_only_action(deps, env, transfer_msg, sender, gamm_packet, "begin_unlock_tokens")
+}
+
+fn assert_lockup_owner(
+    deps: Deps,
+    channel: &str,
+    owner: &str,
+) -> Result<(), ContractError> {
+    let lockup_key = (channel, owner);
+    if !LOCKUP.has(deps.storage, lockup_key) {
+        return Err(ContractError::NoLockupAccount {});
+    }
+
+    Ok(())
 }
 
 fn safe_burn(amount: Amount, our_chain: bool) -> Option<CosmosMsg> {
