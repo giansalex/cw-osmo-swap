@@ -153,6 +153,9 @@ pub enum QueryMsg {
         start_after: Option<String>,
         limit: Option<u32>,
     },
+    /// Returns the lockup address of the channel and owner, empty if not created.
+    /// Return type: LockupResponse.
+    Lockup { channel: String, owner: String },
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema, Debug)]
@@ -209,4 +212,10 @@ pub struct ListExternalTokensResponse {
 pub struct AllowedTokenInfo {
     pub denom: String,
     pub contract: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema, Debug)]
+pub struct LockupResponse {
+    pub owner: String,
+    pub address: String,
 }

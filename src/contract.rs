@@ -9,7 +9,7 @@ use cw_storage_plus::Bound;
 use crate::amount::Amount;
 use crate::error::ContractError;
 use crate::ibc_msg::{ClaimPacket, ExitPoolPacket, Ics20Packet, JoinPoolPacket, LockPacket, OsmoPacket, SwapAmountInRoute, SwapPacket, UnlockPacket};
-use crate::msg::{AllowMsg, AllowedInfo, AllowedResponse, AllowedTokenInfo, AllowedTokenResponse, ChannelResponse, ConfigResponse, ExecuteMsg, ExitPoolMsg, ExternalTokenMsg, InitMsg, JoinPoolMsg, ListAllowedResponse, ListChannelsResponse, ListExternalTokensResponse, QueryMsg, SwapMsg, TransferMsg, LockTokensMsg, CreateLockupMsg, ClaimTokensMsg, UnlockTokensMsg};
+use crate::msg::{AllowMsg, AllowedInfo, AllowedResponse, AllowedTokenInfo, AllowedTokenResponse, ChannelResponse, ConfigResponse, ExecuteMsg, ExitPoolMsg, ExternalTokenMsg, InitMsg, JoinPoolMsg, ListAllowedResponse, ListChannelsResponse, ListExternalTokensResponse, QueryMsg, SwapMsg, TransferMsg, LockTokensMsg, CreateLockupMsg, ClaimTokensMsg, UnlockTokensMsg, LockupResponse};
 use crate::state::{find_external_token, increase_channel_balance, join_ibc_paths, AllowInfo, Config, ExternalTokenInfo, ADMIN, ALLOW_LIST, CHANNEL_INFO, CHANNEL_STATE, CONFIG, EXTERNAL_TOKENS, LOCKUP};
 use cw_utils::{maybe_addr, nonpayable, one_coin};
 
@@ -559,6 +559,7 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
             to_binary(&list_external_tokens(deps, start_after, limit)?)
         }
         QueryMsg::Admin {} => to_binary(&ADMIN.query_admin(deps)?),
+        QueryMsg::Lockup { channel, owner } => to_binary(&query_lockup(deps, channel, owner)?),
     }
 }
 
@@ -632,6 +633,16 @@ fn query_external_token(deps: Deps, denom: String) -> StdResult<AllowedTokenResp
             is_allowed: true,
             contract: Some(a.contract.to_string()),
         },
+    };
+    Ok(res)
+}
+
+fn query_lockup(deps: Deps, channel_id: String, owner: String) -> StdResult<LockupResponse> {
+    let lockup_key = (channel_id.as_str(), owner.as_str());
+    let lockup_address = LOCKUP.load(deps.storage, lockup_key).unwrap_or_default();
+    let res = LockupResponse {
+        owner,
+        address: lockup_address,
     };
     Ok(res)
 }
