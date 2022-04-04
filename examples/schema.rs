@@ -4,9 +4,9 @@ use std::fs::create_dir_all;
 use cosmwasm_schema::{export_schema, remove_schemas, schema_for};
 
 use ics20_swap_client::msg::{
-    ChannelResponse, ExecuteMsg, InitMsg, ListChannelsResponse, QueryMsg, SwapMsg, TransferMsg,
-    JoinPoolMsg, ExitPoolMsg, LockTokensMsg, CreateLockupMsg, UnlockTokensMsg, ClaimTokensMsg, AllowMsg,
-    ExternalTokenMsg,
+    AllowMsg, ChannelResponse, ClaimTokensMsg, CreateLockupMsg, ExecuteMsg, ExitPoolMsg,
+    ExternalTokenMsg, InitMsg, JoinPoolMsg, ListChannelsResponse, LockTokensMsg, QueryMsg, SwapMsg,
+    TransferMsg, UnlockTokensMsg,
 };
 
 fn main() {

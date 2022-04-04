@@ -7,8 +7,14 @@ use cosmwasm_std::{
 
 use crate::amount::{get_cw20_denom, Amount};
 use crate::error::{ContractError, Never};
-use crate::ibc_msg::{CreateLockupAck, Ics20Ack, Ics20Packet, LockResultAck, OsmoPacket, SwapAmountInAck, UnLockResultAck, Voucher};
-use crate::state::{join_ibc_paths, reduce_channel_balance, undo_reduce_channel_balance, ChannelInfo, ReplyArgs, ALLOW_LIST, CHANNEL_INFO, CONFIG, EXTERNAL_TOKENS, REPLY_ARGS, LOCKUP};
+use crate::ibc_msg::{
+    CreateLockupAck, Ics20Ack, Ics20Packet, LockResultAck, OsmoPacket, SwapAmountInAck,
+    UnLockResultAck, Voucher,
+};
+use crate::state::{
+    join_ibc_paths, reduce_channel_balance, undo_reduce_channel_balance, ChannelInfo, ReplyArgs,
+    ALLOW_LIST, CHANNEL_INFO, CONFIG, EXTERNAL_TOKENS, LOCKUP, REPLY_ARGS,
+};
 use cw20::Cw20ExecuteMsg;
 
 pub const ICS20_VERSION: &str = "ics20-1";
@@ -314,20 +320,16 @@ pub fn ibc_packet_ack(
                 ics20msg,
                 "acknowledge_exit_pool",
             ),
-            OsmoPacket::LockupAccount{} => on_create_lockup_packet(
+            OsmoPacket::LockupAccount {} => on_create_lockup_packet(
                 deps,
                 msg,
                 packet_data.sender,
                 ics20msg,
                 "acknowledge_create_lockup",
             ),
-            OsmoPacket::Lock(_) => on_lock_packet(
-                deps,
-                msg,
-                &packet_data,
-                ics20msg,
-                "acknowledge_lock",
-            ),
+            OsmoPacket::Lock(_) => {
+                on_lock_packet(deps, msg, &packet_data, ics20msg, "acknowledge_lock")
+            }
             OsmoPacket::Claim(_) => on_claim_tokens_packet(
                 deps,
                 msg,
@@ -335,7 +337,9 @@ pub fn ibc_packet_ack(
                 ics20msg,
                 "acknowledge_claim_tokens",
             ),
-            OsmoPacket::Unlock(_) => on_unlock_packet(packet_data.sender, ics20msg, "acknowledge_unlock"),
+            OsmoPacket::Unlock(_) => {
+                on_unlock_packet(packet_data.sender, ics20msg, "acknowledge_unlock")
+            }
         }
     } else {
         match ics20msg {
@@ -360,7 +364,6 @@ pub fn ibc_packet_timeout(
 
 // update the balance stored on this (channel, denom) index
 fn on_packet_success(msg: Ics20Packet) -> Result<IbcBasicResponse, ContractError> {
-
     // similar event messages like ibctransfer module
     let attributes = vec![
         attr("action", "acknowledge"),
@@ -572,13 +575,12 @@ fn on_unlock_packet(
             ];
 
             Ok(IbcBasicResponse::new().add_attributes(attributes))
-
         }
         Ics20Ack::Error(err) => Ok(result_ack_error(action_label, sender, err)),
     }
 }
 
-fn result_ack_error(action: &str, sender: String, err: String) -> IbcBasicResponse{
+fn result_ack_error(action: &str, sender: String, err: String) -> IbcBasicResponse {
     IbcBasicResponse::new()
         .add_attribute("action", action)
         .add_attribute("sender", sender)
