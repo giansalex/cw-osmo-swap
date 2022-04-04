@@ -2,7 +2,7 @@ use cosmwasm_std::{Uint128, Uint64};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use cw20::Cw20ReceiveMsg;
+use cw20::{Cw20Coin};
 
 use crate::amount::Amount;
 use crate::state::ChannelInfo;
@@ -34,8 +34,6 @@ pub struct ExternalTokenMsg {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecuteMsg {
-    /// This accepts a properly-encoded ReceiveMsg from a cw20 contract
-    Receive(Cw20ReceiveMsg),
     /// This allows us to transfer *exactly one* native token
     Transfer(TransferMsg),
     /// This allows us to swap tokens
@@ -59,6 +57,7 @@ pub struct SwapMsg {
     pub token_out: String,
     pub min_amount_out: Uint128,
     pub timeout: Option<u64>,
+    pub cw20: Option<Cw20Coin>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -67,6 +66,7 @@ pub struct JoinPoolMsg {
     pub pool: Uint64,
     pub share_min_out: Uint128,
     pub timeout: Option<u64>,
+    pub cw20: Option<Cw20Coin>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -75,6 +75,7 @@ pub struct ExitPoolMsg {
     pub token_out: String,
     pub min_amount_out: Uint128,
     pub timeout: Option<u64>,
+    pub cw20: Option<Cw20Coin>,
 }
 
 /// This is the message we accept via Receive
@@ -88,6 +89,8 @@ pub struct TransferMsg {
     pub remote_address: String,
     /// How long the packet lives in seconds. If not specified, use default_timeout
     pub timeout: Option<u64>,
+
+    pub cw20: Option<Cw20Coin>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]

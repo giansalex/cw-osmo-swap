@@ -495,7 +495,7 @@ mod test {
     use cosmwasm_std::{
         coins, to_vec, IbcEndpoint, IbcMsg, IbcTimeout, Timestamp, Uint128, Uint64,
     };
-    use cw20::Cw20ReceiveMsg;
+    use cw20::{Cw20Coin};
 
     #[test]
     fn check_ack_json() {
@@ -634,19 +634,19 @@ mod test {
         assert_eq!(ack, no_funds);
 
         // we send some cw20 tokens over
-        let transfer = ExecuteMsg::Transfer(TransferMsg {
+        let msg = ExecuteMsg::Transfer(TransferMsg {
             channel: send_channel.to_string(),
             remote_address: "remote-rcpt".to_string(),
             timeout: None,
+            cw20: Some(Cw20Coin {
+                address: cw20_addr.to_string(),
+                amount: Uint128::new(987654321),
+            }),
         });
-        let msg = ExecuteMsg::Receive(Cw20ReceiveMsg {
-            sender: "local-sender".to_string(),
-            amount: Uint128::new(987654321),
-            msg: to_binary(&transfer).unwrap(),
-        });
-        let info = mock_info(cw20_addr, &[]);
+
+        let info = mock_info("local-sender", &[]);
         let res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
-        assert_eq!(1, res.messages.len());
+        assert_eq!(2, res.messages.len());
         let expected = Ics20Packet {
             denom: cw20_denom.into(),
             amount: Uint128::new(987654321),
@@ -719,6 +719,7 @@ mod test {
             channel: send_channel.to_string(),
             remote_address: "my-remote-address".to_string(),
             timeout: None,
+            cw20: None,
         });
         let info = mock_info("local-sender", &coins(987654321, denom));
         execute(deps.as_mut(), mock_env(), info, msg).unwrap();

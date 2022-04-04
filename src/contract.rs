@@ -3,7 +3,7 @@ use cosmwasm_std::entry_point;
 use cosmwasm_std::{from_binary, to_binary, Addr, Binary, CosmosMsg, Deps, DepsMut, Env, IbcMsg, IbcQuery, MessageInfo, Order, PortIdResponse, Response, StdResult, WasmMsg, attr};
 
 use cw2::set_contract_version;
-use cw20::{Cw20Coin, Cw20ExecuteMsg, Cw20ReceiveMsg};
+use cw20::{Cw20Coin, Cw20ExecuteMsg};
 use cw_storage_plus::Bound;
 
 use crate::amount::Amount;
@@ -64,22 +64,21 @@ pub fn execute(
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
     match msg {
-        ExecuteMsg::Receive(msg) => execute_receive(deps, env, info, msg),
         ExecuteMsg::Transfer(msg) => {
-            let coin = one_coin(&info)?;
-            execute_transfer(deps, env, msg, Amount::Native(coin), info.sender)
+            let amount = get_amount(msg.clone().cw20, &info)?;
+            execute_transfer(deps, env, msg, amount, info.sender)
         }
         ExecuteMsg::Swap(msg) => {
-            let coin = one_coin(&info)?;
-            execute_swap(deps, env, msg, Amount::Native(coin), info.sender)
+            let amount = get_amount(msg.clone().cw20, &info)?;
+            execute_swap(deps, env, msg, amount, info.sender)
         }
-        ExecuteMsg::JoinPool(pool) => {
-            let coin = one_coin(&info)?;
-            execute_join_pool(deps, env, pool, Amount::Native(coin), info.sender)
+        ExecuteMsg::JoinPool(msg) => {
+            let amount = get_amount(msg.clone().cw20, &info)?;
+            execute_join_pool(deps, env, msg, amount, info.sender)
         }
-        ExecuteMsg::ExitPool(pool) => {
-            let coin = one_coin(&info)?;
-            execute_exit_pool(deps, env, pool, Amount::Native(coin), info.sender)
+        ExecuteMsg::ExitPool(msg) => {
+            let amount = get_amount(msg.clone().cw20, &info)?;
+            execute_exit_pool(deps, env, msg, amount, info.sender)
         }
         ExecuteMsg::Allow(allow) => execute_allow(deps, env, info, allow),
         ExecuteMsg::AllowExternalToken(token) => allow_external_token(deps, env, info, token),
@@ -90,40 +89,15 @@ pub fn execute(
     }
 }
 
-pub fn execute_receive(
-    deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-    wrapper: Cw20ReceiveMsg,
-) -> Result<Response, ContractError> {
-    nonpayable(&info)?;
-
-    let msg: ExecuteMsg = from_binary(&wrapper.msg)?;
-    let amount = Amount::Cw20(Cw20Coin {
-        address: info.sender.to_string(),
-        amount: wrapper.amount,
-    });
-    let api = deps.api;
-
-    match msg {
-        ExecuteMsg::Transfer(transfer) => execute_transfer(
-            deps,
-            env,
-            transfer,
-            amount,
-            api.addr_validate(&wrapper.sender)?,
-        ),
-        ExecuteMsg::Swap(swap) => {
-            execute_swap(deps, env, swap, amount, api.addr_validate(&wrapper.sender)?)
-        }
-        ExecuteMsg::JoinPool(pool) => {
-            execute_join_pool(deps, env, pool, amount, api.addr_validate(&wrapper.sender)?)
-        }
-        ExecuteMsg::ExitPool(pool) => {
-            execute_exit_pool(deps, env, pool, amount, api.addr_validate(&wrapper.sender)?)
-        }
-        _ => Err(ContractError::UnknownRequest {}),
-    }
+fn get_amount(cw20: Option<Cw20Coin>, info: &MessageInfo) -> Result<Amount, ContractError> {
+    let amount = match cw20 {
+        Some(coin) => {
+            nonpayable(&info)?;
+            Amount::Cw20(coin)
+        },
+        None => Amount::Native(one_coin(&info)?),
+    };
+    Ok(amount)
 }
 
 pub fn execute_transfer(
@@ -200,7 +174,7 @@ pub fn execute_transfer_with_action(
     .into();
     let mut msgs: Vec<CosmosMsg> = vec![msg];
 
-    let burn = safe_burn(amount, our_chain);
+    let burn = safe_burn(amount, env.contract.address.into(), sender.into(),our_chain);
     if let Some(msg) = burn {
         msgs.push(msg);
     }
@@ -254,6 +228,7 @@ pub fn execute_swap(
         channel: msg.channel,
         remote_address: String::new(),
         timeout: msg.timeout,
+        cw20: None,
     };
 
     execute_transfer_with_action(deps, env, transfer_msg, amount, sender, Some(OsmoPacket::Swap(swap_packet)), "swap")
@@ -274,6 +249,7 @@ pub fn execute_join_pool(
         channel: msg.channel,
         remote_address: String::new(),
         timeout: msg.timeout,
+        cw20: None,
     };
 
     execute_transfer_with_action(deps, env, transfer_msg, amount, sender, Some(OsmoPacket::JoinPool(gamm_packet)), "join_pool")
@@ -294,21 +270,27 @@ pub fn execute_exit_pool(
         channel: msg.channel,
         remote_address: String::new(),
         timeout: msg.timeout,
+        cw20: None,
     };
 
     execute_transfer_with_action(deps, env, transfer_msg, amount, sender, Some(OsmoPacket::ExitPool(gamm_packet)), "exit_pool")
 }
 
-fn safe_burn(amount: Amount, our_chain: bool) -> Option<CosmosMsg> {
+fn safe_burn(amount: Amount, contract: String, sender: String,our_chain: bool) -> Option<CosmosMsg> {
     match amount {
         Amount::Native(_) => None,
         Amount::Cw20(coin) => {
-            if our_chain {
-                return None;
-            }
-
-            let msg = Cw20ExecuteMsg::Burn {
-                amount: coin.amount,
+            let msg = if our_chain {
+                Cw20ExecuteMsg::TransferFrom {
+                    owner: sender,
+                    recipient: contract,
+                    amount: coin.amount,
+                }
+            } else {
+                Cw20ExecuteMsg::BurnFrom {
+                    owner: sender,
+                    amount: coin.amount,
+                }
             };
 
             Some(
@@ -592,6 +574,7 @@ mod test {
             channel: send_channel.to_string(),
             remote_address: "foreign-address".to_string(),
             timeout: None,
+            cw20: None,
         };
 
         // works with proper funds
@@ -649,21 +632,20 @@ mod test {
         let cw20_addr = "my-token";
         let mut deps = setup(&[send_channel], &[(cw20_addr, 123456)]);
 
-        let transfer = ExecuteMsg::Transfer(TransferMsg {
+        let msg = ExecuteMsg::Transfer(TransferMsg {
             channel: send_channel.to_string(),
             remote_address: "foreign-address".to_string(),
             timeout: Some(7777),
-        });
-        let msg = ExecuteMsg::Receive(Cw20ReceiveMsg {
-            sender: "my-account".into(),
-            amount: Uint128::new(888777666),
-            msg: to_binary(&transfer).unwrap(),
+            cw20: Some(Cw20Coin {
+                address: cw20_addr.to_string(),
+                amount: Uint128::new(888777666),
+            }),
         });
 
         // works with proper funds
-        let info = mock_info(cw20_addr, &[]);
+        let info = mock_info("my-account", &[]);
         let res = execute(deps.as_mut(), mock_env(), info, msg.clone()).unwrap();
-        assert_eq!(1, res.messages.len());
+        assert_eq!(2, res.messages.len());
         assert_eq!(res.messages[0].gas_limit, None);
         if let CosmosMsg::Ibc(IbcMsg::SendPacket {
             channel_id,
@@ -695,19 +677,18 @@ mod test {
         let mut deps = setup(&[send_channel], &[]);
 
         let cw20_addr = "my-token";
-        let transfer = ExecuteMsg::Transfer(TransferMsg {
+        let msg = ExecuteMsg::Transfer(TransferMsg {
             channel: send_channel.to_string(),
             remote_address: "foreign-address".to_string(),
             timeout: Some(7777),
-        });
-        let msg = ExecuteMsg::Receive(Cw20ReceiveMsg {
-            sender: "my-account".into(),
-            amount: Uint128::new(888777666),
-            msg: to_binary(&transfer).unwrap(),
+            cw20: Some(Cw20Coin{
+                address: cw20_addr.to_string(),
+                amount: Uint128::new(888777666),
+            }),
         });
 
         // works with proper funds
-        let info = mock_info(cw20_addr, &[]);
+        let info = mock_info("my-account", &[]);
         let err = execute(deps.as_mut(), mock_env(), info, msg).unwrap_err();
         assert_eq!(err, ContractError::NotOnAllowList);
     }
