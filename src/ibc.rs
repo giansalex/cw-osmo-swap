@@ -378,19 +378,22 @@ fn on_packet_failure(
     let mut submsg = SubMsg::reply_on_error(send, ACK_TRANSFER_ID);
     submsg.gas_limit = gas_limit;
 
+    let mut attributes = vec![
+        attr("action", action_label),
+        attr("sender", msg.sender),
+        attr("denom", denom),
+        attr("amount", msg.amount.to_string()),
+        attr("success", "false"),
+        attr("error", err),
+    ];
+    if !msg.receiver.is_empty() {
+        attributes.push(attr("receiver", &msg.receiver));
+    }
+
     // similar event messages like ibctransfer module
     let res = IbcBasicResponse::new()
         .add_submessage(submsg)
-        .add_attribute("action", action_label)
-        .add_attribute("sender", msg.sender)
-        .add_attribute("denom", denom)
-        .add_attribute("amount", msg.amount.to_string())
-        .add_attribute("success", "false")
-        .add_attribute("error", err);
-
-    if !msg.receiver.is_empty() {
-        return Ok(res.add_attribute("receiver", &msg.receiver));
-    }
+        .add_attributes(attributes);
 
     Ok(res)
 }
