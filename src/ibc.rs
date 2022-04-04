@@ -7,11 +7,8 @@ use cosmwasm_std::{
 
 use crate::amount::{get_cw20_denom, Amount};
 use crate::error::{ContractError, Never};
-use crate::ibc_msg::{Ics20Ack, Ics20Packet, OsmoPacket, SwapAmountInAck, Voucher};
-use crate::state::{
-    join_ibc_paths, reduce_channel_balance, undo_reduce_channel_balance, ChannelInfo, ReplyArgs,
-    ALLOW_LIST, CHANNEL_INFO, CONFIG, EXTERNAL_TOKENS, REPLY_ARGS,
-};
+use crate::ibc_msg::{CreateLockupAck, Ics20Ack, Ics20Packet, LockResultAck, OsmoPacket, SwapAmountInAck, UnLockResultAck, Voucher};
+use crate::state::{join_ibc_paths, reduce_channel_balance, undo_reduce_channel_balance, ChannelInfo, ReplyArgs, ALLOW_LIST, CHANNEL_INFO, CONFIG, EXTERNAL_TOKENS, REPLY_ARGS, LOCKUP};
 use cw20::Cw20ExecuteMsg;
 
 pub const ICS20_VERSION: &str = "ics20-1";
@@ -298,7 +295,7 @@ pub fn ibc_packet_ack(
     let packet_data: Ics20Packet = from_binary(&msg.original_packet.data)?;
     let ics20msg: Ics20Ack = from_binary(&msg.acknowledgement.data)?;
 
-    if let Some(action) = packet_data.action {
+    if let Some(ref action) = packet_data.action {
         match action {
             OsmoPacket::Swap(_) => {
                 on_gamm_packet(deps, msg, packet_data.sender, ics20msg, "acknowledge_swap")
@@ -317,11 +314,32 @@ pub fn ibc_packet_ack(
                 ics20msg,
                 "acknowledge_exit_pool",
             ),
-            _ => Err(ContractError::Unauthorized{}),
+            OsmoPacket::LockupAccount{} => on_create_lockup_packet(
+                deps,
+                msg,
+                packet_data.sender,
+                ics20msg,
+                "acknowledge_create_lockup",
+            ),
+            OsmoPacket::Lock(_) => on_lock_packet(
+                deps,
+                msg,
+                &packet_data,
+                ics20msg,
+                "acknowledge_lock",
+            ),
+            OsmoPacket::Claim(_) => on_claim_tokens_packet(
+                deps,
+                msg,
+                packet_data.sender,
+                ics20msg,
+                "acknowledge_claim_tokens",
+            ),
+            OsmoPacket::Unlock(_) => on_unlock_packet(packet_data.sender, ics20msg, "acknowledge_unlock"),
         }
     } else {
         match ics20msg {
-            Ics20Ack::Result(_) => on_packet_success(msg.original_packet),
+            Ics20Ack::Result(_) => on_packet_success(packet_data),
             Ics20Ack::Error(err) => {
                 on_packet_failure(deps, msg.original_packet, "acknowledge", err)
             }
@@ -341,8 +359,7 @@ pub fn ibc_packet_timeout(
 }
 
 // update the balance stored on this (channel, denom) index
-fn on_packet_success(packet: IbcPacket) -> Result<IbcBasicResponse, ContractError> {
-    let msg: Ics20Packet = from_binary(&packet.data)?;
+fn on_packet_success(msg: Ics20Packet) -> Result<IbcBasicResponse, ContractError> {
 
     // similar event messages like ibctransfer module
     let attributes = vec![
@@ -419,6 +436,7 @@ fn on_gamm_packet(
         ),
     }
 }
+
 fn on_gamm_packet_success(
     deps: DepsMut,
     packet: IbcPacket,
@@ -452,6 +470,120 @@ fn on_gamm_packet_success(
     Ok(IbcBasicResponse::new()
         .add_submessage(submsg)
         .add_attributes(attributes))
+}
+
+fn on_create_lockup_packet(
+    deps: DepsMut,
+    msg: IbcPacketAckMsg,
+    sender: String,
+    ics20msg: Ics20Ack,
+    action_label: &str,
+) -> Result<IbcBasicResponse, ContractError> {
+    match ics20msg {
+        Ics20Ack::Result(data) => {
+            let ack: CreateLockupAck = from_binary(&data)?;
+            let lockup_key = (msg.original_packet.src.channel_id.as_str(), sender.as_str());
+            LOCKUP.save(deps.storage, lockup_key, &ack.contract)?;
+
+            let res = IbcBasicResponse::new()
+                .add_attribute("action", action_label)
+                .add_attribute("sender", sender)
+                .add_attribute("success", "true")
+                .add_attribute("lockup_address", ack.contract);
+
+            Ok(res)
+        }
+        Ics20Ack::Error(err) => Ok(result_ack_error(action_label, sender, err)),
+    }
+}
+
+fn on_lock_packet(
+    deps: DepsMut,
+    msg: IbcPacketAckMsg,
+    ics20_packet: &Ics20Packet,
+    ics20msg: Ics20Ack,
+    action_label: &str,
+) -> Result<IbcBasicResponse, ContractError> {
+    match ics20msg {
+        Ics20Ack::Result(data) => {
+            let ack: LockResultAck = from_binary(&data)?;
+
+            // similar event messages like ibctransfer module
+            let attributes = vec![
+                attr("action", action_label),
+                attr("sender", &ics20_packet.sender),
+                attr("denom", &ics20_packet.denom),
+                attr("amount", ics20_packet.amount),
+                attr("lock_id", ack.lock_id),
+                attr("success", "true"),
+            ];
+
+            Ok(IbcBasicResponse::new().add_attributes(attributes))
+        }
+        Ics20Ack::Error(err) => on_packet_failure(
+            deps,
+            msg.original_packet,
+            action_label,
+            format!("Gamm error: {}", err),
+        ),
+    }
+}
+
+fn on_claim_tokens_packet(
+    deps: DepsMut,
+    msg: IbcPacketAckMsg,
+    sender: String,
+    ics20msg: Ics20Ack,
+    action_label: &str,
+) -> Result<IbcBasicResponse, ContractError> {
+    match ics20msg {
+        Ics20Ack::Result(data) => {
+            let res: SwapAmountInAck = from_binary(&data)?;
+            if res.amount.is_zero() {
+                let attributes = vec![
+                    attr("action", action_label),
+                    attr("sender", &sender),
+                    attr("success", "false"),
+                    attr("error", "No claim tokens available"),
+                ];
+
+                return Ok(IbcBasicResponse::new().add_attributes(attributes));
+            }
+
+            on_gamm_packet_success(deps, msg.original_packet, sender, res, action_label)
+        }
+        Ics20Ack::Error(err) => Ok(result_ack_error(action_label, sender, err)),
+    }
+}
+
+fn on_unlock_packet(
+    sender: String,
+    ics20msg: Ics20Ack,
+    action_label: &str,
+) -> Result<IbcBasicResponse, ContractError> {
+    match ics20msg {
+        Ics20Ack::Result(data) => {
+            let res: UnLockResultAck = from_binary(&data)?;
+            let attributes = vec![
+                attr("action", action_label),
+                attr("sender", &sender),
+                attr("lock_end_time", res.end_time.to_string()),
+                attr("success", "true"),
+            ];
+
+            Ok(IbcBasicResponse::new().add_attributes(attributes))
+
+        }
+        Ics20Ack::Error(err) => Ok(result_ack_error(action_label, sender, err)),
+    }
+}
+
+fn result_ack_error(action: &str, sender: String, err: String) -> IbcBasicResponse{
+    IbcBasicResponse::new()
+        .add_attribute("action", action)
+        .add_attribute("sender", sender)
+        .add_attribute("success", "false")
+        .add_attribute("error", err)
 }
 
 fn send_amount(amount: Amount, recipient: String, our_chain: bool) -> CosmosMsg {

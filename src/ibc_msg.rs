@@ -1,7 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use cosmwasm_std::{Binary, Uint128, Uint64};
+use cosmwasm_std::{Binary, Timestamp, Uint128, Uint64};
 
 /// Swap Packet
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -45,12 +45,26 @@ pub struct UnlockPacket {
     pub id: Uint64,
 }
 
-/// This is the success response we send on ack for PacketMsg::Balance.
 /// Just acknowledge success or error
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct SwapAmountInAck {
     pub amount: Uint128,
     pub denom: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct CreateLockupAck {
+    pub contract: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct LockResultAck {
+    pub lock_id: Uint64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct UnLockResultAck {
+    pub end_time: Timestamp,
 }
 
 /// The format for sending an ics20 packet.
