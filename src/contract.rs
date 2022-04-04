@@ -196,12 +196,18 @@ pub fn execute_transfer_with_action(
         channel_id: msg.channel,
         data: to_binary(&packet)?,
         timeout: timeout.into(),
-    };
+    }
+    .into();
+    let mut msgs: Vec<CosmosMsg> = vec![msg];
+
+    let burn = safe_burn(amount, our_chain);
+    if let Some(msg) = burn {
+        msgs.push(msg);
+    }
 
     let mut attributes = vec![
         attr("action", action_label),
         attr("sender", &packet.sender),
-
         attr("denom", &packet.denom),
         attr("amount", &packet.amount.to_string()),
     ];
@@ -211,13 +217,8 @@ pub fn execute_transfer_with_action(
 
     // send response
     let res = Response::new()
-        .add_message(msg)
+        .add_messages(msgs)
         .add_attributes(attributes);
-
-    let burn = safe_burn(amount, our_chain);
-    if let Some(msg) = burn {
-        return Ok(res.add_message(msg));
-    }
 
     Ok(res)
 }
