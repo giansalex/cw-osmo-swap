@@ -8,5 +8,15 @@ actions to osmosis chain, e.g. swap, join pool, exit pool.
 - `Swap{}`: Swap assets in Osmosis
 - `JoinPool{}`: Add liquidity to a pool in Osmosis
 - `ExitPool{}`: Remove liquidity to a pool in Osmosis
+- `CreateLockup{}`: Create lockup account
+- `LockTokens{}`: Lock tokens (Start farming)
+- `ClaimTokens{}`: Claim rewards or LP tokens unlocked
+- `UnLockTokens{}`: Begin unlock tokens
 - `AllowExternalToken{}`: Allow external native tokens (from osmosis)
 
+## Query
+
+- `ListChannels{}`: List channels
+- `Channel{}`: Get channel info by ID
+- `ListExternalTokens{}`: List external tokens allowed
+- `Lockup{}`: Get lockup account by user

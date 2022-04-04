@@ -14,6 +14,8 @@ pub const CONFIG: Item<Config> = Item::new("ics20_config");
 // Used to pass info from the ibc_packet_receive to the reply handler
 pub const REPLY_ARGS: Item<ReplyArgs> = Item::new("reply_args");
 
+pub const LOCKUP: Map<(&str, &str), String> = Map::new("lockups");
+
 /// static info on one channel that doesn't change
 pub const CHANNEL_INFO: Map<&str, ChannelInfo> = Map::new("channel_info");
 
@@ -35,6 +37,7 @@ pub struct ChannelState {
 pub struct Config {
     pub default_timeout: u64,
     pub init_channel: bool,
+    pub default_remote_denom: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema, Debug)]

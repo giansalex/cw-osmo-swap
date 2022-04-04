@@ -80,6 +80,12 @@ pub enum ContractError {
 
     #[error("Execute msg unknown")]
     UnknownRequest {},
+
+    #[error("Lockup account not found")]
+    NoLockupAccount,
+
+    #[error("Lockup account already create")]
+    LockupAccountFound,
 }
 
 impl From<FromUtf8Error> for ContractError {
