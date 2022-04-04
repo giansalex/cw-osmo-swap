@@ -6,5 +6,6 @@ mod ibc_msg;
 pub mod msg;
 pub mod state;
 mod test_helpers;
+mod migrations;
 
 pub use crate::error::ContractError;

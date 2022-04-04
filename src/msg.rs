@@ -158,6 +158,11 @@ pub enum QueryMsg {
     Lockup { channel: String, owner: String },
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+pub struct MigrateMsg {
+    pub default_remote_denom: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema, Debug)]
 pub struct ListChannelsResponse {
     pub channels: Vec<ChannelInfo>,

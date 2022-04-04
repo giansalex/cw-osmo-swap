@@ -15,19 +15,14 @@ use crate::ibc_msg::{
     ClaimPacket, ExitPoolPacket, Ics20Packet, JoinPoolPacket, LockPacket, OsmoPacket,
     SwapAmountInRoute, SwapPacket, UnlockPacket,
 };
-use crate::msg::{
-    AllowMsg, AllowedInfo, AllowedResponse, AllowedTokenInfo, AllowedTokenResponse,
-    ChannelResponse, ClaimTokensMsg, ConfigResponse, CreateLockupMsg, ExecuteMsg, ExitPoolMsg,
-    ExternalTokenMsg, InitMsg, JoinPoolMsg, ListAllowedResponse, ListChannelsResponse,
-    ListExternalTokensResponse, LockTokensMsg, LockupResponse, QueryMsg, SwapMsg, TransferMsg,
-    UnlockTokensMsg,
-};
+use crate::msg::{AllowMsg, AllowedInfo, AllowedResponse, AllowedTokenInfo, AllowedTokenResponse, ChannelResponse, ClaimTokensMsg, ConfigResponse, CreateLockupMsg, ExecuteMsg, ExitPoolMsg, ExternalTokenMsg, InitMsg, JoinPoolMsg, ListAllowedResponse, ListChannelsResponse, ListExternalTokensResponse, LockTokensMsg, LockupResponse, QueryMsg, SwapMsg, TransferMsg, UnlockTokensMsg, MigrateMsg};
 use crate::state::{
     find_external_token, increase_channel_balance, join_ibc_paths, AllowInfo, Config,
     ExternalTokenInfo, ADMIN, ALLOW_LIST, CHANNEL_INFO, CHANNEL_STATE, CONFIG, EXTERNAL_TOKENS,
     LOCKUP,
 };
 use cw_utils::{maybe_addr, nonpayable, one_coin};
+use crate::migrations::v1;
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:ics20-swap-client";
@@ -111,6 +106,21 @@ pub fn execute(
             Ok(ADMIN.execute_update_admin(deps, info, Some(admin))?)
         }
     }
+}
+
+#[cfg_attr(not(feature = "library"), entry_point)]
+pub fn migrate(deps: DepsMut, _env: Env, msg: MigrateMsg) -> Result<Response, ContractError> {
+    set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
+
+    let old_config = v1::CONFIG.load(deps.storage)?;
+    let config = Config {
+        default_timeout: old_config.default_timeout,
+        init_channel: old_config.init_channel,
+        default_remote_denom: msg.default_remote_denom,
+    };
+    CONFIG.save(deps.storage, &config)?;
+
+    Ok(Response::new())
 }
 
 pub fn execute_receive(
