@@ -1,9 +1,6 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
-use cosmwasm_std::{
-    from_binary, to_binary, Addr, Binary, ContractInfoResponse, CosmosMsg, Deps, DepsMut, Env,
-    IbcMsg, IbcQuery, MessageInfo, Order, PortIdResponse, Response, StdResult, WasmMsg, WasmQuery,
-};
+use cosmwasm_std::{from_binary, to_binary, Addr, Binary, CosmosMsg, Deps, DepsMut, Env, IbcMsg, IbcQuery, MessageInfo, Order, PortIdResponse, Response, StdResult, WasmMsg, attr};
 
 use cw2::set_contract_version;
 use cw20::{Cw20Coin, Cw20ExecuteMsg, Cw20ReceiveMsg};
@@ -136,9 +133,22 @@ pub fn execute_transfer(
     amount: Amount,
     sender: Addr,
 ) -> Result<Response, ContractError> {
+    execute_transfer_with_action(deps, env, msg, amount, sender, None, "transfer")
+}
+
+pub fn execute_transfer_with_action(
+    deps: DepsMut,
+    env: Env,
+    msg: TransferMsg,
+    amount: Amount,
+    sender: Addr,
+    action: Option<OsmoPacket>,
+    action_label: &str,
+) -> Result<Response, ContractError> {
     if amount.is_empty() {
         return Err(ContractError::NoFunds {});
     }
+
     // ensure the requested channel is registered
     if !CHANNEL_INFO.has(deps.storage, &msg.channel) {
         return Err(ContractError::NoSuchChannel { id: msg.channel });
@@ -155,14 +165,7 @@ pub fn execute_transfer(
 
         let token = find_external_token(deps.storage, coin.clone().address)?;
         if let Some(ext_denom) = token {
-            // TODO: add port_id to external_token info
-            let q = WasmQuery::ContractInfo {
-                contract_addr: env.contract.address.into(),
-            };
-            let res: ContractInfoResponse = deps.querier.query(&q.into())?;
-            let ibc_prefix = join_ibc_paths(res.ibc_port.unwrap().as_str(), msg.channel.as_str());
-
-            denom = join_ibc_paths(ibc_prefix.as_str(), ext_denom.as_str());
+            denom = get_ibc_full_denom(&deps, msg.channel.as_str(), ext_denom.as_str())?;
             our_chain = false;
         }
     };
@@ -181,13 +184,10 @@ pub fn execute_transfer(
         denom,
         sender.as_ref(),
         &msg.remote_address,
-        None,
+        action,
     );
 
     if our_chain {
-        // Update the balance now (optimistically) like ibctransfer modules.
-        // In on_packet_failure (ack with error message or a timeout), we reduce the balance appropriately.
-        // This means the channel works fine if success acks are not relayed.
         increase_channel_balance(deps.storage, &msg.channel, &amount.denom(), amount.amount())?;
     }
 
@@ -198,14 +198,21 @@ pub fn execute_transfer(
         timeout: timeout.into(),
     };
 
+    let mut attributes = vec![
+        attr("action", action_label),
+        attr("sender", &packet.sender),
+
+        attr("denom", &packet.denom),
+        attr("amount", &packet.amount.to_string()),
+    ];
+    if !packet.receiver.is_empty() {
+        attributes.push(attr("receiver", &packet.receiver));
+    }
+
     // send response
     let res = Response::new()
         .add_message(msg)
-        .add_attribute("action", "transfer")
-        .add_attribute("sender", &packet.sender)
-        .add_attribute("receiver", &packet.receiver)
-        .add_attribute("denom", &packet.denom)
-        .add_attribute("amount", &packet.amount.to_string());
+        .add_attributes(attributes);
 
     let burn = safe_burn(amount, our_chain);
     if let Some(msg) = burn {
@@ -213,6 +220,19 @@ pub fn execute_transfer(
     }
 
     Ok(res)
+}
+
+fn get_ibc_full_denom(
+    deps: &DepsMut,
+    channel: &str,
+    denom: &str,
+) -> StdResult<String> {
+    let query = IbcQuery::PortId {}.into();
+    let PortIdResponse { port_id } = deps.querier.query(&query)?;
+
+    let ibc_prefix = join_ibc_paths(port_id.as_str(), channel);
+
+    Ok(join_ibc_paths(ibc_prefix.as_str(), denom))
 }
 
 pub fn execute_swap(
@@ -222,46 +242,6 @@ pub fn execute_swap(
     amount: Amount,
     sender: Addr,
 ) -> Result<Response, ContractError> {
-    if amount.is_empty() {
-        return Err(ContractError::NoFunds {});
-    }
-    // ensure the requested channel is registered
-    if !CHANNEL_INFO.has(deps.storage, &msg.channel) {
-        return Err(ContractError::NoSuchChannel { id: msg.channel });
-    }
-
-    // if cw20 token, ensure it is whitelisted
-    let mut denom = amount.denom();
-    let mut our_chain = true;
-    if let Amount::Cw20(coin) = &amount {
-        let addr = deps.api.addr_validate(&coin.address)?;
-        ALLOW_LIST
-            .may_load(deps.storage, &addr)?
-            .ok_or(ContractError::NotOnAllowList)?;
-
-        let token = find_external_token(deps.storage, coin.clone().address)?;
-        if let Some(ext_denom) = token {
-            // TODO: add port_id to external_token info
-            let q = WasmQuery::ContractInfo {
-                contract_addr: env.contract.address.into(),
-            };
-            let res: ContractInfoResponse = deps.querier.query(&q.into())?;
-            let ibc_prefix = join_ibc_paths(res.ibc_port.unwrap().as_str(), msg.channel.as_str());
-
-            denom = join_ibc_paths(ibc_prefix.as_str(), ext_denom.as_str());
-            our_chain = false;
-        }
-    };
-
-    // delta from user is in seconds
-    let timeout_delta = match msg.timeout {
-        Some(t) => t,
-        None => CONFIG.load(deps.storage)?.default_timeout,
-    };
-    // timeout is in nanoseconds
-    let timeout = env.block.time.plus_seconds(timeout_delta);
-
-    // build swap packet
     let swap_packet = SwapPacket {
         routes: vec![SwapAmountInRoute {
             pool_id: msg.pool,
@@ -269,40 +249,13 @@ pub fn execute_swap(
         }],
         token_out_min_amount: msg.min_amount_out,
     };
-
-    let packet = Ics20Packet::new(
-        amount.amount(),
-        denom,
-        sender.as_ref(),
-        "", // swap-mod will replace this address
-        Some(OsmoPacket::Swap(swap_packet)),
-    );
-
-    if our_chain {
-        increase_channel_balance(deps.storage, &msg.channel, &amount.denom(), amount.amount())?;
-    }
-
-    // prepare ibc message
-    let msg = IbcMsg::SendPacket {
-        channel_id: msg.channel,
-        data: to_binary(&packet)?,
-        timeout: timeout.into(),
+    let transfer_msg = TransferMsg {
+        channel: msg.channel,
+        remote_address: String::new(),
+        timeout: msg.timeout,
     };
 
-    // send response
-    let res = Response::new()
-        .add_message(msg)
-        .add_attribute("action", "swap")
-        .add_attribute("sender", &packet.sender)
-        .add_attribute("denom", &packet.denom)
-        .add_attribute("amount", &packet.amount.to_string());
-
-    let burn = safe_burn(amount, our_chain);
-    if let Some(msg) = burn {
-        return Ok(res.add_message(msg));
-    }
-
-    Ok(res)
+    execute_transfer_with_action(deps, env, transfer_msg, amount, sender, Some(OsmoPacket::Swap(swap_packet)), "swap")
 }
 
 pub fn execute_join_pool(
@@ -312,84 +265,17 @@ pub fn execute_join_pool(
     amount: Amount,
     sender: Addr,
 ) -> Result<Response, ContractError> {
-    if amount.is_empty() {
-        return Err(ContractError::NoFunds {});
-    }
-    // ensure the requested channel is registered
-    if !CHANNEL_INFO.has(deps.storage, &msg.channel) {
-        return Err(ContractError::NoSuchChannel { id: msg.channel });
-    }
-
-    // if cw20 token, ensure it is whitelisted
-    let mut denom = amount.denom();
-    let mut our_chain = true;
-    if let Amount::Cw20(coin) = &amount {
-        let addr = deps.api.addr_validate(&coin.address)?;
-        ALLOW_LIST
-            .may_load(deps.storage, &addr)?
-            .ok_or(ContractError::NotOnAllowList)?;
-
-        let token = find_external_token(deps.storage, coin.clone().address)?;
-        if let Some(ext_denom) = token {
-            // TODO: add port_id to external_token info
-            let q = WasmQuery::ContractInfo {
-                contract_addr: env.contract.address.into(),
-            };
-            let res: ContractInfoResponse = deps.querier.query(&q.into())?;
-            let ibc_prefix = join_ibc_paths(res.ibc_port.unwrap().as_str(), msg.channel.as_str());
-
-            denom = join_ibc_paths(ibc_prefix.as_str(), ext_denom.as_str());
-            our_chain = false;
-        }
-    };
-
-    // delta from user is in seconds
-    let timeout_delta = match msg.timeout {
-        Some(t) => t,
-        None => CONFIG.load(deps.storage)?.default_timeout,
-    };
-    // timeout is in nanoseconds
-    let timeout = env.block.time.plus_seconds(timeout_delta);
-
-    // build swap packet
     let gamm_packet = JoinPoolPacket {
         pool_id: msg.pool,
         share_out_min_amount: msg.share_min_out,
     };
-
-    let packet = Ics20Packet::new(
-        amount.amount(),
-        denom,
-        sender.as_ref(),
-        "", // swap-mod will replace this address
-        Some(OsmoPacket::JoinPool(gamm_packet)),
-    );
-
-    if our_chain {
-        increase_channel_balance(deps.storage, &msg.channel, &amount.denom(), amount.amount())?;
-    }
-
-    // prepare ibc message
-    let msg = IbcMsg::SendPacket {
-        channel_id: msg.channel,
-        data: to_binary(&packet)?,
-        timeout: timeout.into(),
+    let transfer_msg = TransferMsg {
+        channel: msg.channel,
+        remote_address: String::new(),
+        timeout: msg.timeout,
     };
 
-    // send response
-    let res = Response::new()
-        .add_message(msg)
-        .add_attribute("action", "join_pool")
-        .add_attribute("sender", &packet.sender)
-        .add_attribute("denom", &packet.denom)
-        .add_attribute("amount", &packet.amount.to_string());
-
-    let burn = safe_burn(amount, our_chain);
-    if let Some(msg) = burn {
-        return Ok(res.add_message(msg));
-    }
-
-    Ok(res)
+    execute_transfer_with_action(deps, env, transfer_msg, amount, sender, Some(OsmoPacket::JoinPool(gamm_packet)), "join_pool")
 }
 
 pub fn execute_exit_pool(
@@ -399,84 +285,17 @@ pub fn execute_exit_pool(
     amount: Amount,
     sender: Addr,
 ) -> Result<Response, ContractError> {
-    if amount.is_empty() {
-        return Err(ContractError::NoFunds {});
-    }
-    // ensure the requested channel is registered
-    if !CHANNEL_INFO.has(deps.storage, &msg.channel) {
-        return Err(ContractError::NoSuchChannel { id: msg.channel });
-    }
-
-    // if cw20 token, ensure it is whitelisted
-    let mut denom = amount.denom();
-    let mut our_chain = true;
-    if let Amount::Cw20(coin) = &amount {
-        let addr = deps.api.addr_validate(&coin.address)?;
-        ALLOW_LIST
-            .may_load(deps.storage, &addr)?
-            .ok_or(ContractError::NotOnAllowList)?;
-
-        let token = find_external_token(deps.storage, coin.clone().address)?;
-        if let Some(ext_denom) = token {
-            // TODO: add port_id to external_token info
-            let q = WasmQuery::ContractInfo {
-                contract_addr: env.contract.address.into(),
-            };
-            let res: ContractInfoResponse = deps.querier.query(&q.into())?;
-            let ibc_prefix = join_ibc_paths(res.ibc_port.unwrap().as_str(), msg.channel.as_str());
-
-            denom = join_ibc_paths(ibc_prefix.as_str(), ext_denom.as_str());
-            our_chain = false;
-        }
-    };
-
-    // delta from user is in seconds
-    let timeout_delta = match msg.timeout {
-        Some(t) => t,
-        None => CONFIG.load(deps.storage)?.default_timeout,
-    };
-    // timeout is in nanoseconds
-    let timeout = env.block.time.plus_seconds(timeout_delta);
-
-    // build swap packet
     let gamm_packet = ExitPoolPacket {
         token_out_denom: msg.token_out,
         token_out_min_amount: msg.min_amount_out,
     };
-
-    let packet = Ics20Packet::new(
-        amount.amount(),
-        denom,
-        sender.as_ref(),
-        "", // swap-mod will replace this address
-        Some(OsmoPacket::ExitPool(gamm_packet)),
-    );
-
-    if our_chain {
-        increase_channel_balance(deps.storage, &msg.channel, &amount.denom(), amount.amount())?;
-    }
-
-    // prepare ibc message
-    let msg = IbcMsg::SendPacket {
-        channel_id: msg.channel,
-        data: to_binary(&packet)?,
-        timeout: timeout.into(),
+    let transfer_msg = TransferMsg {
+        channel: msg.channel,
+        remote_address: String::new(),
+        timeout: msg.timeout,
     };
 
-    // send response
-    let res = Response::new()
-        .add_message(msg)
-        .add_attribute("action", "exit_pool")
-        .add_attribute("sender", &packet.sender)
-        .add_attribute("denom", &packet.denom)
-        .add_attribute("amount", &packet.amount.to_string());
-
-    let burn = safe_burn(amount, our_chain);
-    if let Some(msg) = burn {
-        return Ok(res.add_message(msg));
-    }
-
-    Ok(res)
+    execute_transfer_with_action(deps, env, transfer_msg, amount, sender, Some(OsmoPacket::ExitPool(gamm_packet)), "exit_pool")
 }
 
 fn safe_burn(amount: Amount, our_chain: bool) -> Option<CosmosMsg> {
