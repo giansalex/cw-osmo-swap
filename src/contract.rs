@@ -191,7 +191,7 @@ pub fn execute_transfer_with_action(
 
         let token = find_external_token(deps.storage, coin.clone().address)?;
         if let Some(ext_denom) = token {
-            denom = get_ibc_full_denom(&deps, msg.channel.as_str(), ext_denom.as_str())?;
+            denom = get_ibc_full_denom(deps.as_ref(), msg.channel.as_str(), ext_denom.as_str())?;
             our_chain = false;
         }
     };
@@ -271,10 +271,12 @@ pub fn execute_only_action(
     // timeout is in nanoseconds
     let timeout = env.block.time.plus_seconds(timeout_delta);
 
+    let denom = get_ibc_full_denom(deps.as_ref(), msg.channel.as_str(), config.default_remote_denom.as_str())?;
+
     // build ics20 packet
     let packet = Ics20Packet::new(
         0u8.into(),
-        config.default_remote_denom,
+        denom,
         sender.as_ref(),
         &msg.remote_address,
         Some(action),
@@ -297,7 +299,7 @@ pub fn execute_only_action(
     Ok(res)
 }
 
-fn get_ibc_full_denom(deps: &DepsMut, channel: &str, denom: &str) -> StdResult<String> {
+fn get_ibc_full_denom(deps: Deps, channel: &str, denom: &str) -> StdResult<String> {
     let query = IbcQuery::PortId {}.into();
     let PortIdResponse { port_id } = deps.querier.query(&query)?;
 
