@@ -15,7 +15,7 @@ use crate::msg::{
     AllowMsg, AllowedInfo, AllowedResponse, AllowedTokenInfo, AllowedTokenResponse,
     ChannelResponse, ConfigResponse, ExecuteMsg, ExitPoolMsg, ExternalTokenMsg, InitMsg,
     JoinPoolMsg, ListAllowedResponse, ListChannelsResponse, ListExternalTokensResponse,
-    PortResponse, QueryMsg, SwapMsg, TransferMsg,
+    QueryMsg, SwapMsg, TransferMsg,
 };
 use crate::state::{
     find_external_token, increase_channel_balance, join_ibc_paths, AllowInfo, Config,
@@ -399,7 +399,6 @@ pub fn allow_external_token(
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
-        QueryMsg::Port {} => to_binary(&query_port(deps)?),
         QueryMsg::ListChannels {} => to_binary(&query_list(deps)?),
         QueryMsg::Channel { id } => to_binary(&query_channel(deps, id)?),
         QueryMsg::Config {} => to_binary(&query_config(deps)?),
@@ -413,12 +412,6 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         }
         QueryMsg::Admin {} => to_binary(&ADMIN.query_admin(deps)?),
     }
-}
-
-fn query_port(deps: Deps) -> StdResult<PortResponse> {
-    let query = IbcQuery::PortId {}.into();
-    let PortIdResponse { port_id } = deps.querier.query(&query)?;
-    Ok(PortResponse { port_id })
 }
 
 fn query_list(deps: Deps) -> StdResult<ListChannelsResponse> {
