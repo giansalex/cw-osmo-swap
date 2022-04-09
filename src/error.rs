@@ -84,6 +84,9 @@ pub enum ContractError {
     #[error("Lockup account not found")]
     NoLockupAccount,
 
+    #[error("Action needs a default remote denom")]
+    NoDefaultDenom {},
+
     #[error("Lockup account already create")]
     LockupAccountFound,
 }

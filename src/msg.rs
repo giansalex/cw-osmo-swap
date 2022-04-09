@@ -15,8 +15,6 @@ pub struct InitMsg {
     pub gov_contract: String,
     /// initial allowlist - all cw20 tokens we will send must be previously allowed by governance
     pub allowlist: Vec<AllowMsg>,
-    /// Default remote denom for send standalone actions
-    pub default_remote_denom: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]

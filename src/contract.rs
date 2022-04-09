@@ -44,7 +44,7 @@ pub fn instantiate(
     let cfg = Config {
         default_timeout: msg.default_timeout,
         init_channel: false,
-        default_remote_denom: msg.default_remote_denom,
+        default_remote_denom: None,
     };
     CONFIG.save(deps.storage, &cfg)?;
 
@@ -263,6 +263,10 @@ pub fn execute_only_action(
     }
 
     let config = CONFIG.load(deps.storage)?;
+    if config.default_remote_denom.is_none() {
+        return Err(ContractError::NoSuchChannel { id: msg.channel });
+    }
+
     // delta from user is in seconds
     let timeout_delta = match msg.timeout {
         Some(t) => t,
@@ -271,7 +275,7 @@ pub fn execute_only_action(
     // timeout is in nanoseconds
     let timeout = env.block.time.plus_seconds(timeout_delta);
 
-    let denom = get_ibc_full_denom(deps.as_ref(), msg.channel.as_str(), config.default_remote_denom.as_str())?;
+    let denom = get_ibc_full_denom(deps.as_ref(), msg.channel.as_str(), config.default_remote_denom.unwrap().as_str())?;
 
     // build ics20 packet
     let packet = Ics20Packet::new(
@@ -593,6 +597,13 @@ pub fn allow_external_token(
         contract: allow.contract.to_owned(),
         gas_limit: None,
     };
+
+    // Save denom for only action.
+    let mut cfg = CONFIG.load(deps.storage)?;
+    if cfg.default_remote_denom.is_none() {
+        cfg.default_remote_denom = Some(allow.denom.to_owned());
+        CONFIG.save(deps.storage, &cfg)?;
+    }
     add_allow_token(deps, set_allow)?;
 
     let res = Response::new()

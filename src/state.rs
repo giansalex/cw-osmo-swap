@@ -37,7 +37,8 @@ pub struct ChannelState {
 pub struct Config {
     pub default_timeout: u64,
     pub init_channel: bool,
-    pub default_remote_denom: String,
+    /// Default remote denom for send standalone actions
+    pub default_remote_denom: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema, Debug)]
