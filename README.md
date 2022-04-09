@@ -1,4 +1,4 @@
-# Swap ICS20
+# Swap ICS20 (Juno)
 
 This is an *IBC Enabled* contract implements the standard ICS20 (IBC transfers), and can send custom
 actions to osmosis chain, e.g. swap, join pool, exit pool.
