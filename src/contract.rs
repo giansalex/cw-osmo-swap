@@ -100,7 +100,7 @@ pub fn execute(
             nonpayable(&info)?;
             execute_claim_tokens(deps, env, msg, info.sender)
         }
-        ExecuteMsg::UnLockTokens(msg) => {
+        ExecuteMsg::UnlockTokens(msg) => {
             nonpayable(&info)?;
             execute_unlock_tokens(deps, env, msg, info.sender)
         }

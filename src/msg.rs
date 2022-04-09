@@ -53,7 +53,7 @@ pub enum ExecuteMsg {
     /// This allows us to claim rewards and LP tokens (Unlocked).
     ClaimTokens(ClaimTokensMsg),
     /// Begin Unlocking tokens
-    UnLockTokens(UnlockTokensMsg),
+    UnlockTokens(UnlockTokensMsg),
     /// This must be called by gov_contract, will allow a new cw20 token to be sent
     Allow(AllowMsg),
     /// This must be called by gov_contract, will allow a new external token to be received
