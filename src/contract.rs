@@ -275,7 +275,11 @@ pub fn execute_only_action(
     // timeout is in nanoseconds
     let timeout = env.block.time.plus_seconds(timeout_delta);
 
-    let denom = get_ibc_full_denom(deps.as_ref(), msg.channel.as_str(), config.default_remote_denom.unwrap().as_str())?;
+    let denom = get_ibc_full_denom(
+        deps.as_ref(),
+        msg.channel.as_str(),
+        config.default_remote_denom.unwrap().as_str(),
+    )?;
 
     // build ics20 packet
     let packet = Ics20Packet::new(
