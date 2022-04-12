@@ -1,4 +1,5 @@
 # Swap ICS20 (Juno)
+[![contracts-ci](https://github.com/giansalex/cw-osmo-swap/actions/workflows/rust.yml/badge.svg)](https://github.com/giansalex/cw-osmo-swap/actions/workflows/rust.yml)
 
 This is an *IBC Enabled* contract implements the standard ICS20 (IBC transfers), and can send custom
 actions to osmosis chain, e.g. swap, join pool, exit pool.
