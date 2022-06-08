@@ -1,15 +1,14 @@
 use cosmwasm_std::{
-    attr, entry_point, from_binary, to_binary, BankMsg, Binary, ContractResult, CosmosMsg, Deps,
-    DepsMut, Env, IbcBasicResponse, IbcChannel, IbcChannelCloseMsg, IbcChannelConnectMsg,
-    IbcChannelOpenMsg, IbcEndpoint, IbcOrder, IbcPacket, IbcPacketAckMsg, IbcPacketReceiveMsg,
-    IbcPacketTimeoutMsg, IbcReceiveResponse, Reply, Response, Storage, SubMsg, WasmMsg,
+    attr, entry_point, from_binary, to_binary, BankMsg, Binary, CosmosMsg, Deps, DepsMut, Env,
+    IbcBasicResponse, IbcChannel, IbcChannelCloseMsg, IbcChannelConnectMsg, IbcChannelOpenMsg,
+    IbcEndpoint, IbcOrder, IbcPacket, IbcPacketAckMsg, IbcPacketReceiveMsg, IbcPacketTimeoutMsg,
+    IbcReceiveResponse, Reply, Response, Storage, SubMsg, SubMsgResult, WasmMsg,
 };
 
 use crate::amount::{get_cw20_denom, Amount};
 use crate::error::{ContractError, Never};
 use crate::ibc_msg::{
-    CreateLockupAck, Ics20Ack, Ics20Packet, LockResultAck, OsmoPacket, SwapAmountInAck,
-    UnLockResultAck, Voucher,
+    CreateLockupAck, Ics20Ack, Ics20Packet, LockResultAck, OsmoPacket, SwapAmountInAck, Voucher,
 };
 use crate::state::{
     join_ibc_paths, reduce_channel_balance, undo_reduce_channel_balance, ChannelInfo, ReplyArgs,
@@ -39,8 +38,8 @@ const ACK_TRANSFER_ID: u64 = 0xfa17;
 pub fn reply(deps: DepsMut, _env: Env, reply: Reply) -> Result<Response, ContractError> {
     match reply.id {
         RECEIVE_ID => match reply.result {
-            ContractResult::Ok(_) => Ok(Response::new()),
-            ContractResult::Err(err) => {
+            SubMsgResult::Ok(_) => Ok(Response::new()),
+            SubMsgResult::Err(err) => {
                 let reply_args = REPLY_ARGS.load(deps.storage)?;
 
                 if reply_args.our_chain {
@@ -56,8 +55,8 @@ pub fn reply(deps: DepsMut, _env: Env, reply: Reply) -> Result<Response, Contrac
             }
         },
         ACK_TRANSFER_ID => match reply.result {
-            ContractResult::Ok(_) => Ok(Response::new()),
-            ContractResult::Err(err) => Ok(Response::new().set_data(ack_fail(err))),
+            SubMsgResult::Ok(_) => Ok(Response::new()),
+            SubMsgResult::Err(err) => Ok(Response::new().set_data(ack_fail(err))),
         },
         _ => Err(ContractError::UnknownReplyId { id: reply.id }),
     }
@@ -565,12 +564,10 @@ fn on_unlock_packet(
     action_label: &str,
 ) -> Result<IbcBasicResponse, ContractError> {
     match ics20msg {
-        Ics20Ack::Result(data) => {
-            let res: UnLockResultAck = from_binary(&data)?;
+        Ics20Ack::Result(_) => {
             let attributes = vec![
                 attr("action", action_label),
                 attr("sender", &sender),
-                attr("lock_end_time", res.end_time.to_string()),
                 attr("success", "true"),
             ];
 
